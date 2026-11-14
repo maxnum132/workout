@@ -122,6 +122,19 @@ tr.done .chk svg{stroke:#fff}
 .fold .ed{font-size:12px;color:var(--accent);font-weight:600}
 .ex.folded{padding:11px 14px}
 .unfold{margin-left:auto;font-size:12px;color:var(--accent);background:none;border:0;font-weight:600;padding:2px 0 2px 8px}
+.planchip{justify-self:start;border:1px solid var(--line);background:var(--surface);border-radius:99px;padding:3px 12px;font-size:12.5px;font-weight:600;color:var(--muted);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.banner{display:grid;gap:6px;background:var(--warn-soft);border-radius:10px;padding:10px 12px;font-size:13px}
+.banner b{color:var(--warn)}
+.banner .edbar{margin:2px 0 0}
+.banner .btn{flex:0 1 auto}
+.prow{display:grid;gap:8px;padding:11px 0;border-top:1px solid var(--line);font-size:14px}
+.prow:first-of-type{border-top:0}
+.wkact{display:flex;gap:8px;align-items:center}
+.wkact .btn{flex:none;padding:7px 12px}
+.wkact select{flex:1;min-width:0}
+.swapbox{display:grid;gap:8px;background:var(--sunk);border-radius:10px;padding:10px;margin-top:10px}
+.swapbox .note{margin:0}
+.edfull select{width:100%}
 .ptop{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
 .ptop .btn{flex:none;margin-top:3px}
 .edcard{display:grid;gap:10px}
@@ -279,12 +292,17 @@ const DEFAULT_P={
 const clone=o=>JSON.parse(JSON.stringify(o));
 // the self-hosted copy has a web manifest in its <head>; the claude.ai artifact does not
 const STANDALONE=!!document.querySelector('link[rel="manifest"]');
-let P=clone(DEFAULT_P);
+let P={};
+// PL: every saved plan; P: the 7 days of the active one (null = rest day)
+let PL={active:'main',list:{}};
 const EXNAME={};
 function rebuildExName(){
   for(const k in EXNAME)delete EXNAME[k];
-  Object.values(DEFAULT_P).forEach(d=>d&&d.ex.forEach(e=>{if(!EXNAME[e.id])EXNAME[e.id]=e}));
-  Object.values(P).forEach(d=>d&&d.ex.forEach(e=>{EXNAME[e.id]=e}));
+  const add=(e,force)=>{if(e&&e.id&&(force||!EXNAME[e.id]))EXNAME[e.id]=e};
+  Object.values(DEFAULT_P).forEach(d=>d&&d.ex.forEach(e=>add(e)));
+  Object.values(PL.list).forEach(pl=>Object.values(pl.days).forEach(d=>d.ex.forEach(e=>add(e))));
+  Object.values(S.sessions||{}).forEach(s=>{if(s&&s.swap)Object.values(s.swap).forEach(e=>add(e))});
+  Object.values(P).forEach(d=>d&&d.ex.forEach(e=>add(e,true)));
 }
 // one exercise from the stored program, coerced into the shape the page expects
 function cleanEx(e,i){
@@ -301,17 +319,39 @@ function cleanEx(e,i){
   if(e.band)o.band=String(e.band).slice(0,30);
   return o;
 }
+function cleanDay(d){
+  if(!d||typeof d!=='object'||!Array.isArray(d.ex))return null;
+  const ex=d.ex.map(cleanEx).filter(Boolean);if(!ex.length)return null;
+  const name=String(d.name||'').trim().slice(0,60)||'โปรแกรม';
+  return {name,short:String(d.short||'').trim().slice(0,12)||name.slice(0,12),warm:String(d.warm||'').slice(0,400),ex};
+}
+const okKey=k=>/^[A-Za-z0-9_-]{1,40}$/.test(k);
 function applyProgram(){
-  P=clone(DEFAULT_P);
-  const days=(S.config&&S.config.program&&S.config.program.days)||{};
-  for(const d in days){
-    if(!P[d]||!Array.isArray(days[d]))continue;
-    const ex=days[d].map(cleanEx).filter(Boolean);
-    if(ex.length)P[d].ex=ex;
+  const raw=S.config&&S.config.plans;
+  PL={active:'main',list:{}};
+  if(raw&&raw.list&&typeof raw.list==='object'){
+    for(const [id,pl] of Object.entries(raw.list)){
+      if(!okKey(id)||!pl||typeof pl!=='object')continue;
+      const days={};for(let d=0;d<7;d++){const c=cleanDay(pl.days&&pl.days[d]);if(c)days[d]=c}
+      PL.list[id]={name:String(pl.name||'').trim().slice(0,40)||'ตาราง',days};
+    }
+    PL.active=PL.list[raw.active]?raw.active:Object.keys(PL.list)[0];
   }
+  if(!Object.keys(PL.list).length){
+    // first run: the built-in program, plus per-day edits saved by the older single-plan version
+    const legacy=(S.config&&S.config.program&&S.config.program.days)||{};
+    const days={};
+    for(let d=0;d<7;d++){
+      if(!DEFAULT_P[d])continue;
+      days[d]=clone(DEFAULT_P[d]);days[d].warm=days[d].warm.replace(/^วอร์ม 5 นาที: /,'');
+      if(Array.isArray(legacy[d])){const ex=legacy[d].map(cleanEx).filter(Boolean);if(ex.length)days[d].ex=ex}
+    }
+    PL.list={main:{name:'V-shape 5 วัน',days}};PL.active='main';
+  }
+  P={};for(let d=0;d<7;d++)P[d]=PL.list[PL.active].days[d]||null;
   rebuildExName();
 }
-rebuildExName();
+function savePlans(){S.config.plans={active:PL.active,list:clone(PL.list),updated:Date.now()};queueSave('config','plans');applyProgram()}
 
 /* ---------- utils ---------- */
 const $=s=>document.querySelector(s);
@@ -334,7 +374,7 @@ function repText(e){
 const S={sessions:{},body:{},config:{}};
 let db=null,mode='local';
 let today=ymd(new Date());
-const st={tab:'train',dow:new Date().getDay(),date:today,delBody:null,exPick:'incline',open:new Set(),edit:null,month:today.slice(0,7),csv:null,imp:null};
+const st={tab:'train',dow:new Date().getDay(),date:today,delBody:null,exPick:'incline',open:new Set(),edit:null,plans:null,swapFor:null,month:today.slice(0,7),csv:null,imp:null};
 try{const t=localStorage.getItem('wk2-tab');if(t==='hist'||t==='body')st.tab=t}catch(e){}
 
 function lsLoad(){try{const j=JSON.parse(localStorage.getItem('wk2-data')||'{}');S.sessions=j.sessions||{};S.body=j.body||{};S.config=j.config||{}}catch(e){}applyProgram()}
@@ -374,6 +414,7 @@ async function initDb(){
     for(const k of pending){const [c,id]=k.split('/');if(c===col)next[id]=S[col][id]}
     S[col]=next;
     if(col==='config')applyProgram();
+    if(col==='sessions')rebuildExName();
     if(!snap.metadata.fromCache){first[col]=true;if(first.sessions&&first.body){clearTimeout(to);if(!pending.size)setStatus('ok','ซิงก์แล้ว')}}
     softRender();
   },err=>{clearTimeout(to);setStatus('err',err.code==='revoked'?'ไม่มีสิทธิ์บันทึก':'เชื่อมต่อไม่ได้')});
@@ -384,7 +425,7 @@ async function initDb(){
 const sKey=()=>st.date+'_'+st.dow;
 function getSession(create){
   const k=sKey();let s=S.sessions[k];
-  if(!s&&create){s=S.sessions[k]={date:st.date,dow:st.dow,sets:{},updated:Date.now()}}
+  if(!s&&create){s=S.sessions[k]={date:st.date,dow:st.dow,plan:PL.active,pn:P[st.dow]?P[st.dow].short:'',sets:{},updated:Date.now()}}
   return s;
 }
 function lastFor(exId){
@@ -413,6 +454,34 @@ function hint(e,last){
 function weekDates(){const d=new Date();const s=new Date(d.getFullYear(),d.getMonth(),d.getDate()-d.getDay());return [...Array(7)].map((_,i)=>ymd(new Date(s.getFullYear(),s.getMonth(),s.getDate()+i)))}
 function sessionDone(s){if(!s||!s.sets)return 0;let n=0;for(const a of Object.values(s.sets))for(const x of a)if(x&&x.d)n++;return n}
 
+/* ---------- deload + the program actually shown for the open day ---------- */
+const wkStartOf=s=>{const d=parseYmd(s);return ymd(new Date(d.getFullYear(),d.getMonth(),d.getDate()-d.getDay()))};
+const DELOAD_AFTER=6; // full training weeks before a deload is suggested
+function deloadInfo(){
+  const dl=S.config.deload||{},cur=wkStartOf(st.date),weeks=new Set();
+  Object.values(S.sessions).forEach(s=>{if(s&&sessionDone(s)>0){const w=wkStartOf(s.date);if((!dl.week||w>dl.week)&&w<cur)weeks.add(w)}});
+  const active=dl.week===cur;
+  return {active,weeks:weeks.size,due:!active&&st.date===today&&weeks.size>=DELOAD_AFTER&&dl.snooze!==cur};
+}
+// today's list = the plan's day, with one-day swaps applied and sets halved in a deload week
+function curProg(){
+  const base=P[st.dow],s=getSession(false);
+  if(!base){
+    // rest day in the current plan, but an older session was logged here: show what was logged
+    if(!s||sessionDone(s)===0)return null;
+    const ex=Object.keys(s.sets||{}).map(id=>EXNAME[id]).filter(Boolean);
+    return ex.length?{name:s.pn||'บันทึกเก่า',short:s.pn||'',warm:'',ex,old:true}:null;
+  }
+  const sw=(s&&s.swap)||{},dl=deloadInfo().active;
+  if(!Object.keys(sw).length&&!dl)return base;
+  return Object.assign({},base,{ex:base.ex.map(e=>{
+    const c=sw[e.id]&&cleanEx(sw[e.id],0);
+    let x=c?Object.assign(c,{swapOf:e.id,swapName:e.n,abs:e.abs}):e;
+    if(dl)x=Object.assign({},x,{s:Math.max(1,Math.ceil(x.s/2))});
+    return x;
+  })});
+}
+
 /* ---------- render ---------- */
 function renderDays(){
   const wk=weekDates(),todayDow=new Date().getDay();
@@ -422,18 +491,29 @@ function renderDays(){
     return '<button class="day'+(p?'':' rest')+(i===todayDow?' today':'')+'" data-dow="'+i+'" aria-pressed="'+(st.tab==='train'&&st.dow===i)+'">'+(did?'<span class="dot" aria-label="ฝึกแล้วสัปดาห์นี้"></span>':'')+d+'<small>'+(p?p.short:'พัก')+'</small></button>';
   }).join('');
 }
+function planChip(){return '<button class="planchip" data-plans>ตาราง: '+esc(PL.list[PL.active].name)+' ▾</button>'}
+function deloadHtml(){
+  const d=deloadInfo();
+  if(d.active)return '<div class="banner"><b>สัปดาห์ Deload</b><span>เซตลดเหลือครึ่งหนึ่งทั้งสัปดาห์ ใช้น้ำหนักเดิมหรือเบาลงราว 10% ไม่ต้องเล่นถึงหมดแรง</span><div class="edbar"><button class="btn small ghost" data-dlstop>ยกเลิก Deload</button></div></div>';
+  if(d.due)return '<div class="banner"><b>ฝึกต่อเนื่องมา '+d.weeks+' สัปดาห์แล้ว</b><span>แนะนำ Deload 1 สัปดาห์: ลดเซตลงครึ่งหนึ่งให้ร่างกายฟื้น แล้วกลับมาเล่นเต็ม</span><div class="edbar"><button class="btn small" data-dlstart>เริ่ม Deload สัปดาห์นี้</button><button class="btn small ghost" data-dlsnooze>ไว้สัปดาห์หน้า</button></div></div>';
+  return '';
+}
 function renderTrain(){
-  const p=P[st.dow];const m=$('#main');
+  const m=$('#main');
+  if(st.plans){renderPlans();return}
+  if(st.edit&&st.edit.dow===st.dow){renderEditor();return}
+  const p=curProg();
   if(!p){
-    m.innerHTML='<div class="plan"><h1>วัน'+DAYFULL[st.dow]+' · พัก</h1></div><div class="rest-card"><h2>พักเต็มวัน</h2><div class="note">กล้ามโตตอนพัก ไม่ใช่ตอนเล่น</div><ul><li>เดินให้ได้ 8,000–10,000 ก้าว</li><li>ยืดเหยียด 10 นาทีถ้าตึง</li><li>นอน 7–9 ชั่วโมง</li><li>โปรตีนยังต้องถึงเป้าเหมือนวันฝึก</li></ul></div>';
+    m.innerHTML='<div class="plan">'+planChip()+'<div class="ptop"><h1>วัน'+DAYFULL[st.dow]+' · พัก</h1><button class="btn small ghost" data-newday>ตั้งเป็นวันฝึก</button></div></div><div class="rest-card"><h2>พักเต็มวัน</h2><div class="note">กล้ามโตตอนพัก ไม่ใช่ตอนเล่น</div><ul><li>เดินให้ได้ 8,000–10,000 ก้าว</li><li>ยืดเหยียด 10 นาทีถ้าตึง</li><li>นอน 7–9 ชั่วโมง</li><li>โปรตีนยังต้องถึงเป้าเหมือนวันฝึก</li></ul></div>';
     return;
   }
-  if(st.edit&&st.edit.dow===st.dow){renderEditor();return}
   const s=getSession(false);
   const total=p.ex.reduce((a,e)=>a+e.s,0),done=sessionDone(s);
-  let h='<div class="plan"><div class="ptop"><h1>'+esc(p.name)+'</h1><button class="btn small ghost" data-edit>แก้ตาราง</button></div><div class="sub"><label for="dt">วันที่บันทึก <input type="date" id="dt" value="'+st.date+'" max="'+today+'"></label><span>'+(st.date===today?'วันนี้':thDate(st.date))+'</span></div>';
+  let h='<div class="plan">'+planChip()+'<div class="ptop"><h1>'+esc(p.name)+'</h1>'+(p.old?'':'<button class="btn small ghost" data-edit>แก้ตาราง</button>')+'</div>'+(p.old?'<div class="note">บันทึกเก่า: วันนี้เป็นวันพักในตารางที่ใช้อยู่</div>':'')+'<div class="sub"><label for="dt">วันที่บันทึก <input type="date" id="dt" value="'+st.date+'" max="'+today+'"></label><span>'+(st.date===today?'วันนี้':thDate(st.date))+'</span></div>';
   h+='<div class="barrow"><div class="bar"><span id="pbar" style="width:'+(total?done/total*100:0)+'%"></span></div><span class="num" id="prog">'+done+'/'+total+' เซต</span></div>';
-  h+='<details class="warm"><summary>วอร์มอัพ 5 นาที</summary><p>'+esc(p.warm.replace(/^วอร์ม 5 นาที: /,''))+'</p></details></div><div class="list">';
+  h+=deloadHtml();
+  if(p.warm)h+='<details class="warm"><summary>วอร์มอัพ</summary><p>'+esc(p.warm)+'</p></details>';
+  h+='</div><div class="list">';
   let inAbs=false;
   p.ex.forEach((e,idx)=>{
     if(e.abs&&!inAbs){inAbs=true;h+='<div class="sect">หน้าท้อง · ~10 นาที</div>'}
@@ -443,11 +523,58 @@ function renderTrain(){
   h+='<div id="sum">'+summaryHtml()+'</div></div>';
   m.innerHTML=h;
 }
+// one-day swap: the pill on a swapped exercise, and the picker while choosing
+function swapHtml(e){
+  const orig=e.swapOf||e.id;let h='';
+  if(e.swapOf)h+='<div class="prev" style="margin-bottom:0"><span class="pill new">วันนี้ใช้แทน: '+esc(e.swapName)+'</span><button class="btn small ghost" data-unswap="'+orig+'">คืนท่าเดิม</button></div>';
+  if(st.swapFor===orig){
+    const used=new Set(curProg().ex.map(x=>x.id));
+    const opts=Object.values(EXNAME).filter(x=>!used.has(x.id)&&x.id!==orig).sort((a,b)=>a.n.localeCompare(b.n));
+    h+='<div class="swapbox"><label class="edfull" for="swapsel">เลือกท่าจากคลัง<select id="swapsel"><option value="">— เลือก —</option>'+opts.map(o=>'<option value="'+o.id+'">'+esc(o.n)+'</option>').join('')+'</select></label><label class="edfull" for="swapnew">หรือพิมพ์ชื่อท่าใหม่<input id="swapnew" placeholder="เช่น Push-up"></label><div class="edbar"><button class="btn" data-swapok="'+orig+'">ใช้ท่านี้วันนี้</button><button class="btn ghost" data-swapno>ยกเลิก</button></div><div class="note">เปลี่ยนเฉพาะวันที่เปิดอยู่ ตารางหลักไม่เปลี่ยน</div></div>';
+  }
+  return h;
+}
+/* ---------- plans: saved programs + the week layout of the active one ---------- */
+function renderPlans(){
+  const ps=st.plans,ids=Object.keys(PL.list),pl=PL.list[PL.active];
+  let h='<div class="plan"><div class="ptop"><h1>จัดการตาราง</h1><button class="btn small" data-plclose>เสร็จ</button></div><div class="note">ประวัติการฝึกอยู่ครบทุกชุด สลับชุดไปมาได้ ท่าชื่อเดียวกันใช้ประวัติร่วมกัน</div></div><div class="list">';
+  h+='<div class="card"><h2>ชุดตาราง</h2>';
+  ids.forEach(id=>{
+    const x=PL.list[id],n=Object.keys(x.days).length,act=id===PL.active;
+    h+='<div class="prow">';
+    if(ps.rename===id)h+='<div class="edbar" style="margin:0"><input id="plname" class="edname" maxlength="40" aria-label="ชื่อชุดตาราง" value="'+esc(x.name)+'"><button class="btn small" data-plrenok="'+id+'" style="flex:none">บันทึกชื่อ</button></div>';
+    else h+='<div><b>'+esc(x.name)+'</b> '+(act?'<span class="pill up">ใช้อยู่</span>':'')+'<div class="note">'+n+' วันฝึก/สัปดาห์</div></div>';
+    h+='<div class="edbtns" style="justify-content:flex-start;flex-wrap:wrap">'+(act?'':'<button class="btn small" data-pluse="'+id+'">ใช้ชุดนี้</button>')+'<button class="btn small ghost" data-plren="'+id+'">เปลี่ยนชื่อ</button><button class="btn small ghost" data-plcopy="'+id+'">ทำสำเนา</button>'+
+      (act?'':(ps.del===id?'<button class="btn small danger" data-pldelok="'+id+'">ยืนยันลบชุดนี้</button>':'<button class="btn small ghost" data-pldel="'+id+'">ลบ</button>'))+'</div></div>';
+  });
+  h+='<button class="btn ghost" data-plnew style="width:100%;margin-top:10px">+ สร้างชุดเปล่า</button></div>';
+  h+='<div class="card"><h2>โครงสัปดาห์ · '+esc(pl.name)+'</h2><div class="note" style="margin-bottom:4px">ย้ายวันฝึก/วันพัก สลับหรือคัดลอกโปรแกรมข้ามวันได้จากเมนู "จัดการ"</div>';
+  for(let d=0;d<7;d++){
+    const day=pl.days[d];
+    let opt='<option value="">จัดการ…</option>';
+    for(let x=0;x<7;x++){if(x===d)continue;if(day||pl.days[x])opt+='<option value="sw:'+x+'">สลับกับวัน'+DAYFULL[x]+'</option>'}
+    if(day){for(let x=0;x<7;x++){if(x!==d)opt+='<option value="cp:'+x+'">คัดลอกไปวัน'+DAYFULL[x]+'</option>'}opt+='<option value="rest:0">ตั้งเป็นวันพัก</option>'}
+    h+='<div class="prow"><div><b>'+DAYFULL[d]+'</b> · '+(day?esc(day.name)+' <span class="note">('+day.ex.length+' ท่า)</span>':'<span class="note">พัก</span>')+'</div><div class="wkact"><button class="btn small ghost" data-wkedit="'+d+'">'+(day?'แก้ท่า':'สร้างโปรแกรม')+'</button><select id="wk-'+d+'" data-wkact="'+d+'" aria-label="จัดการวัน'+DAYFULL[d]+'">'+opt+'</select></div>';
+    const c=ps.confirm;
+    if(c&&c.d===d)h+='<div class="banner"><span>'+(c.op==='cp'?'วัน'+DAYFULL[c.x]+'มีโปรแกรมอยู่แล้ว จะถูกแทนที่ด้วยโปรแกรมของวัน'+DAYFULL[d]:'โปรแกรมของวัน'+DAYFULL[d]+'จะถูกลบออกจากชุดนี้ (ประวัติการฝึกยังอยู่)')+'</span><div class="edbar"><button class="btn small danger" data-wkok>ยืนยัน</button><button class="btn small ghost" data-wkno>ยกเลิก</button></div></div>';
+    h+='</div>';
+  }
+  h+='</div></div>';
+  $('#main').innerHTML=h;
+}
+function doWeek(c){
+  const days=PL.list[PL.active].days;
+  if(c.op==='sw'){const a=days[c.d],b=days[c.x];if(b)days[c.d]=b;else delete days[c.d];if(a)days[c.x]=a;else delete days[c.x]}
+  else if(c.op==='cp'){if(days[c.d])days[c.x]=clone(days[c.d])}
+  else if(c.op==='rest'){delete days[c.d]}
+  savePlans();renderDays();
+}
 /* ---------- program editor ---------- */
 function renderEditor(){
-  const ed=st.edit,p=P[ed.dow];
-  const custom=!!(S.config.program&&S.config.program.days&&S.config.program.days[ed.dow]);
-  let h='<div class="plan"><div class="ptop"><h1>แก้ตาราง · วัน'+DAYFULL[ed.dow]+'</h1></div><div class="note">เปลี่ยนชื่อท่าได้ ประวัติของท่านั้นยังต่อเนื่อง · ลบท่าแล้วบันทึกเก่ายังอยู่ · เลื่อนลำดับด้วย ↑ ↓</div></div><div class="list">';
+  const ed=st.edit;
+  const custom=!ed.isNew&&!!DEFAULT_P[ed.dow];
+  let h='<div class="plan"><div class="ptop"><h1>'+(ed.isNew?'สร้างโปรแกรม':'แก้ตาราง')+' · วัน'+DAYFULL[ed.dow]+'</h1></div><div class="note">ชุด: '+esc(PL.list[PL.active].name)+' · เปลี่ยนชื่อท่าได้ ประวัติยังต่อเนื่อง · ลบท่าแล้วบันทึกเก่ายังอยู่</div></div><div class="list">';
+  h+='<section class="ex edcard"><label class="edfull" for="eh-name">ชื่อโปรแกรมของวันนี้<input id="eh-name" data-h="name" maxlength="60" value="'+esc(ed.name)+'" placeholder="เช่น Push · อก + ไหล่"></label><label class="edfull" for="eh-short">ชื่อย่อ (แสดงบนแถบวัน)<input id="eh-short" data-h="short" maxlength="12" value="'+esc(ed.short)+'" placeholder="เช่น Push"></label><label class="edfull" for="eh-warm">วอร์มอัพ<textarea id="eh-warm" data-h="warm" rows="2" placeholder="ไม่ใส่ก็ได้">'+esc(ed.warm)+'</textarea></label></section>';
   ed.ex.forEach((e,i)=>{
     const unit=e.u||'';
     h+='<section class="ex edcard" data-ei="'+i+'"><div class="edtop"><span class="exn">'+(i+1)+'</span><input class="edname" id="en-'+i+'" data-k="n" aria-label="ชื่อท่า" value="'+esc(e.n)+'" placeholder="ชื่อท่า"></div>'+
@@ -465,7 +592,9 @@ function renderEditor(){
       '<div class="edbtns"><button class="btn small ghost" data-mv="-1"'+(i===0?' disabled':'')+' aria-label="เลื่อนขึ้น">↑</button><button class="btn small ghost" data-mv="1"'+(i===ed.ex.length-1?' disabled':'')+' aria-label="เลื่อนลง">↓</button>'+
       (ed.rm===i?'<button class="btn small danger" data-rmok>ยืนยันลบท่านี้</button>':'<button class="btn small ghost" data-rm>ลบ</button>')+'</div></section>';
   });
-  h+='<button class="btn ghost" data-add style="width:100%">+ เพิ่มท่า</button>';
+  const inDay=new Set(ed.ex.map(e=>e.id));
+  const lib=Object.values(EXNAME).filter(x=>!inDay.has(x.id)).sort((a,b)=>a.n.localeCompare(b.n));
+  h+='<div class="edbar"><button class="btn ghost" data-add>+ ท่าใหม่</button><select id="addlib" aria-label="เพิ่มท่าจากคลัง" style="flex:1 1 160px"><option value="">+ เลือกจากคลังท่า…</option>'+lib.map(o=>'<option value="'+o.id+'">'+esc(o.n)+'</option>').join('')+'</select></div>';
   if(ed.err)h+='<div class="pill hold" style="justify-self:start">'+esc(ed.err)+'</div>';
   h+='<div class="edbar"><button class="btn" data-esave>บันทึกตาราง</button><button class="btn ghost" data-ecancel>ยกเลิก</button>'+
     (custom?(ed.reset?'<button class="btn danger" data-eresetok>ยืนยันคืนค่าเดิม</button>':'<button class="btn ghost" data-ereset>คืนค่าเดิม</button>'):'')+'</div></div>';
@@ -480,18 +609,16 @@ function editField(t){
 function saveEditor(){
   const ed=st.edit;
   if(ed.ex.some(e=>!String(e.n||'').trim())){ed.err='ใส่ชื่อท่าให้ครบทุกท่าก่อนบันทึก';renderEditor();return}
-  const ex=ed.ex.map((e,i)=>cleanEx(Object.assign({},e,{u:e.u||undefined}),i)).filter(Boolean);
-  if(!ex.length){ed.err='ต้องมีอย่างน้อย 1 ท่า';renderEditor();return}
-  const cfg=S.config.program?clone(S.config.program):{days:{}};
-  cfg.days=cfg.days||{};cfg.days[ed.dow]=ex;cfg.updated=Date.now();
-  S.config.program=cfg;queueSave('config','program');
-  applyProgram();st.edit=null;render();scrollTo(0,0);
+  const name=String(ed.name||'').trim()||('โปรแกรมวัน'+DAYFULL[ed.dow]);
+  const day=cleanDay({name,short:ed.short,warm:ed.warm,ex:ed.ex.map(e=>Object.assign({},e,{u:e.u||undefined}))});
+  if(!day){ed.err='ต้องมีอย่างน้อย 1 ท่า';renderEditor();return}
+  PL.list[PL.active].days[ed.dow]=day;savePlans();
+  st.edit=null;render();scrollTo(0,0);
 }
 function resetEditor(){
-  const cfg=S.config.program?clone(S.config.program):{days:{}};
-  if(cfg.days)delete cfg.days[st.edit.dow];cfg.updated=Date.now();
-  S.config.program=cfg;queueSave('config','program');
-  applyProgram();st.edit=null;render();scrollTo(0,0);
+  const d=st.edit.dow;
+  if(DEFAULT_P[d]){const day=clone(DEFAULT_P[d]);day.warm=day.warm.replace(/^วอร์ม 5 นาที: /,'');PL.list[PL.active].days[d]=day;savePlans()}
+  st.edit=null;render();scrollTo(0,0);
 }
 const exDoneCount=(s,id)=>((s&&s.sets&&s.sets[id])||[]).filter(x=>x&&x.d).length;
 function exCard(e,n,s){
@@ -504,7 +631,7 @@ function exCard(e,n,s){
   }
   const last=lastFor(e.id);
   let h='<section class="ex'+(isDone?' complete':'')+'" data-ex="'+e.id+'" data-n="'+n+'"><div class="exh"><div class="exn">'+n+'</div><div style="flex:1;min-width:0"><h3>'+esc(e.n)+'</h3><div class="meta"><b>'+e.s+' × '+repText(e)+'</b>'+(e.w?' · เริ่ม '+esc(e.w)+' กก.':'')+(e.band?' · ยาง'+esc(e.band):'')+'</div></div>'+(isDone?'<button class="unfold" data-refold="'+e.id+'">ย่อ</button>':'')+'</div>';
-  h+='<div class="prev">'+(last?'ครั้งก่อน ('+shortDate(last.s.date)+'): <span class="num" style="font-size:14px;color:var(--ink)">'+(e.bw?'':esc(fmt(num(last.arr[0].w)))+' กก. × ')+last.arr.map(x=>esc(x.r||'–')).join(' · ')+'</span>':'')+hint(e,last)+'</div>';
+  h+=swapHtml(e)+'<div class="prev">'+(last?'ครั้งก่อน ('+shortDate(last.s.date)+'): <span class="num" style="font-size:14px;color:var(--ink)">'+(e.bw?'':esc(fmt(num(last.arr[0].w)))+' กก. × ')+last.arr.map(x=>esc(x.r||'–')).join(' · ')+'</span>':'')+hint(e,last)+'</div>';
   h+='<table class="sets"><colgroup><col class="c-n">'+(e.bw?'':'<col>')+'<col><col class="c-k"></colgroup><thead><tr><th>เซต</th>'+(e.bw?'':'<th>กก.</th>')+'<th>'+(e.u==='sec'?'วินาที':'ครั้ง')+'</th><th></th></tr></thead><tbody>';
   const rStep=e.u==='sec'?5:1;
   for(let i=0;i<e.s;i++){
@@ -515,11 +642,11 @@ function exCard(e,n,s){
       '<td>'+stp('r',x.r,lx&&lx.r||(e.u==='max'?'':e.r[1]),rStep,'numeric',e.u==='sec'?'วินาที':'จำนวนครั้ง')+'</td>'+
       '<td><button class="chk" aria-label="ทำเซต '+(i+1)+' เสร็จ" aria-pressed="'+!!x.d+'"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button></td></tr>';
   }
-  h+='</tbody></table><details class="how"><summary>วิธีทำ</summary><p>'+esc(e.c)+'</p>'+(e.band?'<p class="note">ตัวคล้องประตู: เสียบฝั่งบานพับ ปิดประตูแล้วล็อก ยืนฝั่งที่ดึงแล้วประตูยิ่งปิดแน่น (ประตูเปิดออกไปอีกฝั่ง) · ยางเบาไปเกี่ยวเพิ่มอีกเส้นได้</p>':'')+'<p class="note">พักระหว่างเซตประมาณ '+e.rest+' วินาที</p><a href="https://www.youtube.com/results?search_query='+encodeURIComponent(e.n.replace(/^Superset: /,'')+' form')+'" target="_blank" rel="noopener">ดูคลิปท่านี้บน YouTube ↗</a></details></section>';
+  h+='</tbody></table><details class="how"><summary>วิธีทำ</summary><p>'+esc(e.c)+'</p>'+(e.band?'<p class="note">ตัวคล้องประตู: เสียบฝั่งบานพับ ปิดประตูแล้วล็อก ยืนฝั่งที่ดึงแล้วประตูยิ่งปิดแน่น (ประตูเปิดออกไปอีกฝั่ง) · ยางเบาไปเกี่ยวเพิ่มอีกเส้นได้</p>':'')+'<p class="note">พักระหว่างเซตประมาณ '+e.rest+' วินาที</p>'+(P[st.dow]?'<p style="margin:0 0 8px"><button class="btn small ghost" data-swap="'+(e.swapOf||e.id)+'">เปลี่ยนท่าเฉพาะวันนี้</button></p>':'')+'<a href="https://www.youtube.com/results?search_query='+encodeURIComponent(e.n.replace(/^Superset: /,'')+' form')+'" target="_blank" rel="noopener">ดูคลิปท่านี้บน YouTube ↗</a></details></section>';
   return h;
 }
 function summaryHtml(){
-  const p=P[st.dow],s=getSession(false);if(!p)return '';
+  const p=curProg(),s=getSession(false);if(!p)return '';
   const total=p.ex.reduce((a,e)=>a+e.s,0),done=sessionDone(s);
   if(!done)return '';
   const wins=[];
@@ -568,9 +695,9 @@ function renderHist(){
   const e=EXNAME[st.exPick]||opts[0];
   const pts=[];
   list.slice().reverse().forEach(([k,s])=>{const a=(s.sets[e.id]||[]).filter(x=>x&&x.d);if(!a.length)return;const v=e.bw?Math.max(...a.map(x=>num(x.r)||0)):Math.max(...a.map(x=>num(x.w)||0));if(v>0)pts.push({x:s.date,y:v})});
-  let h='<div class="panel"><div class="card"><h2>สัปดาห์นี้</h2><div class="stats"><div class="stat"><div class="v num">'+thisWeek+'<small>/5</small></div><div class="k">วันที่ฝึก</div></div><div class="stat"><div class="v num">'+streak+'<small>สัปดาห์</small></div><div class="k">ฝึกต่อเนื่อง</div></div><div class="stat"><div class="v num">'+list.length+'</div><div class="k">ครั้งทั้งหมด</div></div></div></div>';
+  let h='<div class="panel"><div class="card"><h2>สัปดาห์นี้</h2><div class="stats"><div class="stat"><div class="v num">'+thisWeek+'<small>/'+Object.values(P).filter(Boolean).length+'</small></div><div class="k">วันที่ฝึก</div></div><div class="stat"><div class="v num">'+streak+'<small>สัปดาห์</small></div><div class="k">ฝึกต่อเนื่อง</div></div><div class="stat"><div class="v num">'+list.length+'</div><div class="k">ครั้งทั้งหมด</div></div></div></div>';
   h+='<div class="card"><h2>พัฒนาการรายท่า</h2><label class="note" for="exsel">เลือกท่า</label><select id="exsel">'+opts.map(o=>'<option value="'+o.id+'"'+(o.id===e.id?' selected':'')+'>'+esc(o.n)+'</option>').join('')+'</select><div class="note" style="margin:8px 0 2px">'+(e.bw?(e.u==='sec'?'วินาทีสูงสุดต่อครั้ง':'จำนวนครั้งสูงสุดต่อเซต'):'น้ำหนักสูงสุดที่ใช้ (กก.)')+'</div>'+chart(pts,e.n)+'</div>';
-  h+='<div class="card"><h2>ประวัติการฝึก</h2>'+(list.length?list.slice(0,40).map(([k,s])=>{const p=P[s.dow];const tot=p?p.ex.reduce((a,e)=>a+e.s,0):0;return '<button class="rowbtn" data-open="'+esc(k)+'"><div class="row"><span>'+thDate(s.date)+' · '+esc(p?p.short:'')+'</span><span class="r num">'+sessionDone(s)+'/'+tot+' เซต ›</span></div></button>'}).join(''):'<div class="empty">ยังไม่มีบันทึก เริ่มจากแท็บ "ฝึก" แล้วติ๊กเซตที่ทำเสร็จ</div>')+'</div>';
+  h+='<div class="card"><h2>ประวัติการฝึก</h2>'+(list.length?list.slice(0,40).map(([k,s])=>{const p=P[s.dow];return '<button class="rowbtn" data-open="'+esc(k)+'"><div class="row"><span>'+thDate(s.date)+' · '+esc(s.pn||(p?p.short:''))+'</span><span class="r num">'+sessionDone(s)+' เซต ›</span></div></button>'}).join(''):'<div class="empty">ยังไม่มีบันทึก เริ่มจากแท็บ "ฝึก" แล้วติ๊กเซตที่ทำเสร็จ</div>')+'</div>';
   h+=monthHtml();
   let lastBk=null;try{lastBk=localStorage.getItem('wk2-lastbackup')}catch(e){}
   const bkOld=STANDALONE&&(!lastBk||(Date.now()-parseYmd(lastBk).getTime())>30*864e5);
@@ -617,7 +744,7 @@ const csvRows=rows=>'﻿'+rows.map(r=>r.map(csvCell).join(',')).join('\r\n');
 function workoutsCsv(){
   const rows=[['วันที่','วัน','โปรแกรม','ท่า','เซต','น้ำหนัก (กก.)','ครั้ง/วินาที','ทำแล้ว']];
   Object.values(S.sessions).filter(Boolean).sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:a.dow-b.dow).forEach(s=>{
-    const prog=(P[s.dow]&&P[s.dow].short)||(DEFAULT_P[s.dow]&&DEFAULT_P[s.dow].short)||'';
+    const prog=s.pn||(P[s.dow]&&P[s.dow].short)||(DEFAULT_P[s.dow]&&DEFAULT_P[s.dow].short)||'';
     for(const [id,arr] of Object.entries(s.sets||{})){(arr||[]).forEach((x,i)=>{if(!x||(!x.w&&!x.r&&!x.d))return;rows.push([s.date,DAYFULL[s.dow],prog,(EXNAME[id]&&EXNAME[id].n)||id,i+1,x.w||'',x.r||'',x.d?'ใช่':''])})}
     if(s.note)rows.push([s.date,DAYFULL[s.dow],prog,'โน้ต','','','',s.note]);
   });
@@ -633,7 +760,8 @@ function importData(d){
   let ns=0,nb=0,cfg=false;
   for(const [k,v] of Object.entries(d.sessions||{})){if(!okId(k)||!v||typeof v!=='object'||typeof v.date!=='string')continue;S.sessions[k]=clone(v);queueSave('sessions',k);ns++}
   for(const [k,v] of Object.entries(d.body||{})){if(!okId(k)||!v||typeof v!=='object'||num(v.weight)==null)continue;S.body[k]=clone(v);queueSave('body',k);nb++}
-  if(d.config&&d.config.program&&typeof d.config.program==='object'){S.config.program=clone(d.config.program);queueSave('config','program');applyProgram();cfg=true}
+  for(const k of ['program','plans','deload']){if(d.config&&d.config[k]&&typeof d.config[k]==='object'){S.config[k]=clone(d.config[k]);queueSave('config',k);if(k!=='deload')cfg=true}}
+  applyProgram();
   return {ns,nb,cfg};
 }
 function allJson(){return JSON.stringify({app:'vshape-log',v:1,exported:today,sessions:S.sessions,body:S.body,config:S.config},null,1)}
@@ -686,7 +814,7 @@ function softRender(){
   renderDays();
   const a=document.activeElement;
   if(a&&/^(INPUT|TEXTAREA)$/.test(a.tagName)&&$('#main').contains(a))return;
-  if(st.tab==='train'&&st.edit)return;
+  if(st.tab==='train'&&(st.edit||st.plans||st.swapFor))return;
   if(st.tab==='train'&&[...pending].some(k=>k.startsWith('sessions/')))return;
   if(st.tab==='train'){const y=scrollY;renderTrain();scrollTo(0,y)}else if(st.tab==='hist')renderHist();else renderBody();
 }
@@ -703,18 +831,19 @@ document.addEventListener('visibilitychange',()=>{if(!document.hidden)checkRollo
 setInterval(checkRollover,60000);
 
 /* ---------- events ---------- */
-$('#days').addEventListener('click',ev=>{const b=ev.target.closest('.day');if(!b)return;st.dow=+b.dataset.dow;st.edit=null;st.tab='train';render();scrollTo(0,0)});
-document.querySelector('.tabs').addEventListener('click',ev=>{const b=ev.target.closest('.tab');if(!b)return;st.tab=b.dataset.tab;st.delBody=null;try{localStorage.setItem('wk2-tab',st.tab)}catch(e){}render();scrollTo(0,0)});
+$('#days').addEventListener('click',ev=>{const b=ev.target.closest('.day');if(!b)return;st.dow=+b.dataset.dow;st.edit=null;st.plans=null;st.swapFor=null;st.tab='train';render();scrollTo(0,0)});
+document.querySelector('.tabs').addEventListener('click',ev=>{const b=ev.target.closest('.tab');if(!b)return;st.tab=b.dataset.tab;st.delBody=null;st.plans=null;st.swapFor=null;try{localStorage.setItem('wk2-tab',st.tab)}catch(e){}render();scrollTo(0,0)});
 $('#main').addEventListener('input',ev=>{
   const t=ev.target;
   if(t.dataset.f){
     const tr=t.closest('tr');setField(t.closest('.ex').dataset.ex,+tr.dataset.i,t.dataset.f,t.value.trim());
   }
+  if(t.dataset.h&&st.edit){st.edit[t.dataset.h]=t.value;return}
   if(t.closest('[data-ei]')){editField(t);return}
   if(t.id==='note'){const s=getSession(true);s.note=t.value;s.updated=Date.now();queueSave('sessions',sKey())}
 });
 function exArr(exId){
-  const e=P[st.dow].ex.find(x=>x.id===exId),s=getSession(true);
+  const e=curProg().ex.find(x=>x.id===exId),s=getSession(true);
   const arr=s.sets[exId]=s.sets[exId]||[];
   for(let j=0;j<e.s;j++)if(!arr[j])arr[j]={w:'',r:'',d:false};
   return {e,s,arr};
@@ -736,7 +865,7 @@ function setField(exId,i,f,val){
   s.updated=Date.now();queueSave('sessions',sKey());
 }
 function refreshProgress(){
-  const p=P[st.dow],s=getSession(false),tot=p.ex.reduce((a,e)=>a+e.s,0),dn=sessionDone(s);
+  const p=curProg(),s=getSession(false),tot=p.ex.reduce((a,e)=>a+e.s,0),dn=sessionDone(s);
   $('#prog').textContent=dn+'/'+tot+' เซต';$('#pbar').style.width=(dn/tot*100)+'%';
   $('#sum').innerHTML=summaryHtml();
   renderDays();
@@ -753,11 +882,17 @@ $('#main').addEventListener('change',ev=>{
   const t=ev.target;
   if(t.id==='dt'&&t.value){st.date=t.value>today?today:t.value;renderTrain()}
   if(t.id==='exsel'){st.exPick=t.value;renderHist()}
+  if(t.id==='addlib'&&t.value&&st.edit&&EXNAME[t.value]){st.edit.ex.push(clone(EXNAME[t.value]));st.edit.rm=null;const y=scrollY;renderEditor();scrollTo(0,y);return}
+  if(t.dataset.wkact!=null&&st.plans&&t.value){
+    const d=+t.dataset.wkact,parts=t.value.split(':'),c={op:parts[0],d,x:+parts[1]},days=PL.list[PL.active].days,y=scrollY;
+    if(c.op==='sw'||(c.op==='cp'&&!days[c.x])){st.plans.confirm=null;doWeek(c)}else st.plans.confirm=c;
+    renderPlans();scrollTo(0,y);return;
+  }
   if(t.id==='impfile'&&t.files&&t.files[0]){
     t.files[0].text().then(txt=>{
       let d=null;try{d=JSON.parse(txt)}catch(e){}
       if(!d||d.app!=='vshape-log'){st.imp={msg:'ไฟล์นี้ไม่ใช่ไฟล์สำรองของสมุดฝึก เลือกไฟล์ vshape-backup-….json'}}
-      else{const ns=Object.keys(d.sessions||{}).length,nb=Object.keys(d.body||{}).length;st.imp={msg:'ไฟล์สำรองวันที่ '+(d.exported?thDate(d.exported):'–')+': '+ns+' วันฝึก · '+nb+' บันทึกน้ำหนัก'+(d.config&&d.config.program?' · ตารางที่แก้ไว้':'')+' — วันที่ซ้ำกับข้อมูลในเครื่องจะใช้ของไฟล์',data:d}}
+      else{const ns=Object.keys(d.sessions||{}).length,nb=Object.keys(d.body||{}).length;st.imp={msg:'ไฟล์สำรองวันที่ '+(d.exported?thDate(d.exported):'–')+': '+ns+' วันฝึก · '+nb+' บันทึกน้ำหนัก'+(d.config&&(d.config.program||d.config.plans)?' · ตารางที่แก้ไว้':'')+' — วันที่ซ้ำกับข้อมูลในเครื่องจะใช้ของไฟล์',data:d}}
       renderHist();
     }).catch(()=>{st.imp={msg:'อ่านไฟล์ไม่ได้ ลองเลือกใหม่'};renderHist()});
   }
@@ -766,7 +901,45 @@ $('#main').addEventListener('change',ev=>{
 $('#main').addEventListener('click',ev=>{
   const T=sel=>ev.target.closest(sel);
   // program editor
-  if(T('[data-edit]')){st.edit={dow:st.dow,ex:clone(P[st.dow].ex)};render();scrollTo(0,0);return}
+  const reTrain=()=>{const y=scrollY;renderTrain();scrollTo(0,y)};
+  const B=a=>{const el=T('['+a+']');return el?el.getAttribute(a):null};
+  let v;
+  if(T('[data-plans]')){st.plans={};st.edit=null;st.swapFor=null;render();scrollTo(0,0);return}
+  if(T('[data-newday]')){st.edit={dow:st.dow,isNew:true,name:'',short:'',warm:'',ex:[]};render();scrollTo(0,0);return}
+  if(T('[data-edit]')&&P[st.dow]){const p=P[st.dow];st.swapFor=null;st.edit={dow:st.dow,name:p.name,short:p.short,warm:p.warm,ex:clone(p.ex)};render();scrollTo(0,0);return}
+  // deload week
+  if(T('[data-dlstart]')){const o={week:wkStartOf(today)},pv=(S.config.deload||{}).week;if(pv)o.prev=pv;S.config.deload=o;queueSave('config','deload');reTrain();return}
+  if(T('[data-dlsnooze]')){S.config.deload=Object.assign({},S.config.deload||{},{snooze:wkStartOf(today)});queueSave('config','deload');reTrain();return}
+  if(T('[data-dlstop]')){const o={snooze:wkStartOf(st.date)},pv=(S.config.deload||{}).prev;if(pv)o.week=pv;S.config.deload=o;queueSave('config','deload');reTrain();return}
+  // one-day exercise swap
+  if((v=B('data-swap'))){st.swapFor=v;reTrain();return}
+  if(T('[data-swapno]')){st.swapFor=null;reTrain();return}
+  if((v=B('data-unswap'))){const s=getSession(true);if(s.swap){delete s.swap[v];s.updated=Date.now();queueSave('sessions',sKey())}st.swapFor=null;reTrain();return}
+  if((v=B('data-swapok'))){
+    const base=P[st.dow]&&P[st.dow].ex.find(x=>x.id===v);if(!base)return;
+    const nm=($('#swapnew').value||'').trim(),sel=$('#swapsel').value;let ex=null;
+    if(nm){const hit=Object.values(EXNAME).find(x=>x.n.toLowerCase()===nm.toLowerCase());ex=hit?clone(hit):Object.assign(clone(base),{id:'c'+Date.now().toString(36),n:nm,c:''})}
+    else if(sel&&EXNAME[sel])ex=clone(EXNAME[sel]);
+    if(!ex||ex.id===v)return;
+    const s=getSession(true);s.swap=s.swap||{};s.swap[v]=cleanEx(ex,0);s.updated=Date.now();queueSave('sessions',sKey());
+    st.swapFor=null;rebuildExName();reTrain();return;
+  }
+  // plans screen
+  if(st.plans&&st.tab==='train'){
+    const ps=st.plans,again=()=>{const y=scrollY;renderPlans();scrollTo(0,y)};
+    if(T('[data-plclose]')){st.plans=null;render();scrollTo(0,0);return}
+    if((v=B('data-pluse'))&&PL.list[v]){PL.active=v;savePlans();st.plans={};render();return}
+    if((v=B('data-plrenok'))&&PL.list[v]){const nm=($('#plname').value||'').trim().slice(0,40);if(nm){PL.list[v].name=nm;savePlans()}ps.rename=null;again();return}
+    if((v=B('data-plren'))){ps.rename=v;ps.del=null;again();const i=$('#plname');if(i)i.focus();return}
+    if((v=B('data-plcopy'))&&PL.list[v]){PL.list['p'+Date.now().toString(36)]={name:(PL.list[v].name+' (สำเนา)').slice(0,40),days:clone(PL.list[v].days)};savePlans();again();return}
+    if(T('[data-plnew]')){const id='p'+Date.now().toString(36);PL.list[id]={name:'ตารางใหม่',days:{}};PL.active=id;savePlans();st.plans={rename:id};render();const i=$('#plname');if(i){i.focus();i.select()}return}
+    if((v=B('data-pldelok'))&&PL.list[v]&&v!==PL.active){delete PL.list[v];savePlans();ps.del=null;again();return}
+    if((v=B('data-pldel'))){ps.del=v;ps.rename=null;again();return}
+    if((v=B('data-wkedit'))!=null){const d=+v,day=PL.list[PL.active].days[d];st.plans=null;st.dow=d;st.edit=day?{dow:d,name:day.name,short:day.short,warm:day.warm,ex:clone(day.ex)}:{dow:d,isNew:true,name:'',short:'',warm:'',ex:[]};render();scrollTo(0,0);return}
+    if(T('[data-wkok]')&&ps.confirm){const c=ps.confirm;ps.confirm=null;doWeek(c);again();return}
+    if(T('[data-wkno]')){ps.confirm=null;again();return}
+    return;
+  }
   if(st.edit&&st.tab==='train'){
     const ed=st.edit,sec=T('[data-ei]'),i=sec?+sec.dataset.ei:-1,y=scrollY;
     const again=()=>{renderEditor();scrollTo(0,y)};
@@ -791,7 +964,7 @@ $('#main').addEventListener('click',ev=>{
   if(sb){
     const tr=sb.closest('tr'),sec=sb.closest('.ex'),exId=sec.dataset.ex,i=+tr.dataset.i,f=sb.dataset.step,d=parseFloat(sb.dataset.d);
     const inp=tr.querySelector('[data-f='+f+']');
-    const e=P[st.dow].ex.find(x=>x.id===exId);
+    const e=curProg().ex.find(x=>x.id===exId);
     const cur=num(inp.value);let v;
     if(cur==null){ // first tap on an empty field shows last time's value (or the suggested start) as-is
       let s0=num(inp.placeholder);
@@ -805,9 +978,9 @@ $('#main').addEventListener('click',ev=>{
     return;
   }
   const uf=ev.target.closest('[data-unfold]');
-  if(uf){const id=uf.dataset.unfold;st.open.add(id);const sec=uf.closest('.ex');const e=P[st.dow].ex.find(x=>x.id===id);sec.outerHTML=exCard(e,+sec.dataset.n,getSession(false));return}
+  if(uf){const id=uf.dataset.unfold;st.open.add(id);const sec=uf.closest('.ex');const e=curProg().ex.find(x=>x.id===id);sec.outerHTML=exCard(e,+sec.dataset.n,getSession(false));return}
   const rf=ev.target.closest('[data-refold]');
-  if(rf){const id=rf.dataset.refold;st.open.delete(id);const sec=rf.closest('.ex');const e=P[st.dow].ex.find(x=>x.id===id);sec.outerHTML=exCard(e,+sec.dataset.n,getSession(false));return}
+  if(rf){const id=rf.dataset.refold;st.open.delete(id);const sec=rf.closest('.ex');const e=curProg().ex.find(x=>x.id===id);sec.outerHTML=exCard(e,+sec.dataset.n,getSession(false));return}
   const c=ev.target.closest('.chk');
   if(c){
     const sec=c.closest('.ex'),tr=c.closest('tr'),exId=sec.dataset.ex,i=+tr.dataset.i;
