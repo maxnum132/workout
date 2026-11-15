@@ -252,6 +252,9 @@ const DAYFULL=['อาทิตย์','จันทร์','อังคาร'
 const NOTION='https://app.notion.com/p/41533fefdc76817f9c8cc21d6022f913';
 // r=[low,high] reps (or seconds when u:'sec'); u:'max' = as many as possible, high = goal
 // bw=no weight field; side=per side; abs=core block; rest seconds
+// pull-up block for someone who can do 1–3 reps: many short sets instead of a few max sets
+const PU_CUE='ดึงอกเข้าหาบาร์ ลงจนแขนตึงทุกครั้ง ห้ามเหวี่ยง · หยุดก่อนหมดแรง 1 ครั้ง · ทำได้ 3 ครั้งครบทุกเซต → ปรับเป็น 4 เซต × 3–5';
+const BAND_PU={id:'bandpullup',n:'Band-assisted Pull-up',s:2,r:[5,8],bw:1,band:'ดำ',rest:90,c:'คล้องยางกับบาร์ เหยียบหรือคุกเข่าบนยาง ดึงเต็มระยะ ลงช้า 2–3 วิ · ได้ 8 ครั้งทุกเซต → เปลี่ยนเป็นยางที่เบาลง'};
 const DEFAULT_P={
  0:{name:'ขา A + Core',short:'ขา A',warm:'วอร์ม 5 นาที: ย่ำเท้า/กระโดดตบเบาๆ 2 นาที → Bodyweight Squat 15 ครั้ง → Hip Hinge 10 ครั้ง',ex:[
   {id:'goblet',n:'Goblet Squat',s:4,r:[8,12],w:'14–16',rest:90,c:'ถือดัมเบลชิดอก ยกส้นเท้าขึ้นเล็กน้อย ลงช้า 3 วิ เข่าไปตามแนวปลายเท้า อกตั้ง'},
@@ -269,8 +272,9 @@ const DEFAULT_P={
   {id:'hkr',n:'Hanging Knee Raise',s:3,r:[8,12],bw:1,abs:1,rest:45,c:'โหนบาร์ ม้วนสะโพกยกเข่าขึ้นหาอก ไม่เหวี่ยงตัว ลงช้า'},
   {id:'revcrunch',n:'Reverse Crunch',s:3,r:[12,15],bw:1,abs:1,rest:45,c:'นอนหงาย ม้วนก้นให้ลอยจากพื้นด้วยหน้าท้องล่าง ไม่ใช้แรงเหวี่ยงขา'}]},
  2:{name:'Pull · หลังกว้าง + หน้าแขน',short:'Pull',warm:'วอร์ม 5 นาที: หมุนไหล่ → Dead Hang 20–30 วิ → Band Pull-apart 15 ครั้ง → Scapular Pull-up 8 ครั้ง',ex:[
-  {id:'pullup',n:'Pull-up',s:4,r:[1,8],u:'max',bw:1,rest:120,c:'มือกว้างกว่าไหล่เล็กน้อย ดึงอกเข้าหาบาร์ ลงจนแขนตึงทุกครั้ง ห้ามเหวี่ยง · เป้าหมาย 8 ครั้งติด'},
-  {id:'negpull',n:'Negative Pull-up',s:2,r:[3,3],bw:1,rest:90,c:'กระโดดหรือเหยียบเก้าอี้ขึ้นไปค้างบนบาร์ แล้วลดตัวลงช้า 5 วิ'},
+  {id:'pullup',n:'Pull-up',s:5,r:[1,3],bw:1,rest:90,c:PU_CUE},
+  {id:'negpull',n:'Negative Pull-up',s:3,r:[3,3],bw:1,rest:90,c:'กระโดดหรือเหยียบเก้าอี้ขึ้นไปค้างบนบาร์ แล้วลดตัวลงช้า 5 วิ'},
+  BAND_PU,
   {id:'row',n:'One-arm Dumbbell Row',s:3,r:[8,12],side:1,w:'12–14',rest:90,c:'มือและเข่าข้างเดียวพาดม้านั่ง ดึงศอกไปทางสะโพก ไม่บิดลำตัว'},
   {id:'bandpd',n:'Kneeling Band Lat Pulldown',s:3,r:[12,15],bw:1,band:'ดำ + เขียว',rest:60,c:'คล้องตัวคล้องประตูช่วงบนสุด (หรือพันสายยางรอบบาร์โหนแล้วเกี่ยวด้ามจับ) คุกเข่า ดึงศอกลงข้างลำตัว บีบใต้รักแร้ · เบาไปให้เกี่ยวยางเพิ่มอีกเส้น'},
   {id:'rdfly',n:'Chest-supported Rear Delt Fly',s:3,r:[15,20],w:'3–4',rest:60,c:'นอนคว่ำบนม้านั่งเอียง กางแขนออกด้านข้าง นำด้วยหลังมือ ไม่บีบสะบัก'},
@@ -287,7 +291,7 @@ const DEFAULT_P={
   {id:'sphd',n:'Side Plank Hip Dip',s:3,r:[10,10],side:1,bw:1,abs:1,rest:45,c:'ท่า Side Plank ลดสะโพกลงเกือบแตะพื้นแล้วยกขึ้นสูง เน้นเอวข้าง'},
   {id:'bicycle',n:'Bicycle Crunch',s:3,r:[20,20],bw:1,abs:1,rest:45,c:'ทำช้าๆ บิดลำตัวจริงๆ ให้ศอกไปหาเข่าฝั่งตรงข้าม (นับรวมสองข้าง)'}]},
  5:{name:'V-shape · ช่วงบนรวม',short:'V-shape',warm:'วอร์ม 5 นาที: หมุนไหล่ → Dead Hang 20 วิ → Band Pull-apart 15 ครั้ง → Push-up 10 ครั้ง',ex:[
-  {id:'pullup',n:'Pull-up / Chin-up',s:3,r:[1,8],u:'max',bw:1,rest:120,c:'Chin-up คือหงายมือ ง่ายกว่าเล็กน้อย ใช้สลับได้ ดึงเต็มระยะทุกครั้ง'},
+  {id:'pullup',n:'Pull-up / Chin-up',s:4,r:[1,3],bw:1,rest:90,c:'Chin-up คือหงายมือ ง่ายกว่าเล็กน้อย ใช้สลับได้ · '+PU_CUE},
   {id:'incline',n:'Incline Dumbbell Press',s:3,r:[8,12],w:'8–10',rest:90,c:'ม้านั่ง 30° บีบสะบักชิด ลดดัมเบลถึงระดับอกบน'},
   {id:'row',n:'One-arm Dumbbell Row',s:3,r:[10,12],side:1,w:'12–14',rest:90,c:'ดึงศอกไปทางสะโพก บีบหลังค้าง 1 วิ'},
   {id:'lateral',n:'Lateral Raise',s:3,r:[12,20],w:'3–5',rest:60,c:'ยกออกด้านข้างถึงระดับไหล่ ศอกงอนิด นำด้วยศอก ไม่เหวี่ยง'},
@@ -331,6 +335,25 @@ function cleanDay(d){
   return {name,short:String(d.short||'').trim().slice(0,12)||name.slice(0,12),warm:String(d.warm||'').slice(0,400),ex};
 }
 const okKey=k=>/^[A-Za-z0-9_-]{1,40}$/.test(k);
+// saved plans made before the pull-up change still have 'as many as possible, goal 8';
+// switch only exercises that still look exactly like the old defaults, so custom edits stay
+function migratePullups(){
+  let changed=false;
+  for(const pl of Object.values(PL.list))for(const [d,day] of Object.entries(pl.days)){
+    const i=day.ex.findIndex(e=>e.id==='pullup'&&e.u==='max'&&e.r[1]===8);
+    if(i<0)continue;
+    const fri=+d===5,e=day.ex[i];
+    delete e.u;e.s=fri?4:5;e.r=[1,3];e.rest=90;
+    e.c=fri?'Chin-up คือหงายมือ ง่ายกว่าเล็กน้อย ใช้สลับได้ · '+PU_CUE:PU_CUE;
+    if(!fri){
+      const n=day.ex.findIndex(x=>x.id==='negpull');
+      if(n>=0&&day.ex[n].s===2)day.ex[n].s=3;
+      if(!day.ex.some(x=>x.id==='bandpullup'))day.ex.splice((n>=0?n:i)+1,0,clone(BAND_PU));
+    }
+    changed=true;
+  }
+  return changed;
+}
 function applyProgram(){
   const raw=S.config&&S.config.plans;
   PL={active:'main',list:{}};
@@ -342,6 +365,7 @@ function applyProgram(){
     }
     PL.active=PL.list[raw.active]?raw.active:Object.keys(PL.list)[0];
   }
+  if(Object.keys(PL.list).length&&migratePullups())S.config.plans={active:PL.active,list:clone(PL.list),updated:Date.now()},queueSave('config','plans');
   if(!Object.keys(PL.list).length){
     // first run: the built-in program, plus per-day edits saved by the older single-plan version
     const legacy=(S.config&&S.config.program&&S.config.program.days)||{};
