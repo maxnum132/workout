@@ -173,6 +173,12 @@ details.how summary::before{content:"+ "}
 details.how[open] summary::before{content:"– "}
 details.how p{margin:2px 0 6px;color:var(--ink)}
 details.how a{color:var(--accent)}
+.sheetbg{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:50}
+.sheet{position:fixed;left:0;right:0;bottom:0;z-index:51;background:var(--surface);border-radius:18px 18px 0 0;padding:18px 16px calc(16px + env(safe-area-inset-bottom));max-height:85vh;overflow:auto;display:grid;gap:12px;max-width:640px;margin:0 auto;box-shadow:0 -6px 24px rgba(0,0,0,.18)}
+.sheet h2{margin:0;font-size:18px}
+.sheet .opt{border:1px solid var(--line);border-radius:12px;padding:12px;display:grid;gap:4px}
+.sheet .opt .edbar{margin-top:6px}
+.linkbtn{background:none;border:0;padding:0;color:var(--accent);font:inherit;text-decoration:underline;cursor:pointer}
 .rest-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:18px;margin-top:16px}
 .rest-card h2{margin:0 0 6px;font-size:18px}
 .rest-card ul{margin:6px 0 0;padding-left:20px;color:var(--muted)}
@@ -403,7 +409,7 @@ function repText(e){
 const S={sessions:{},body:{},config:{}};
 let db=null,mode='local';
 let today=ymd(new Date());
-const st={tab:'train',dow:new Date().getDay(),date:today,delBody:null,exPick:'incline',open:new Set(),edit:null,plans:null,swapFor:null,month:today.slice(0,7),csv:null,imp:null};
+const st={tab:'train',dow:new Date().getDay(),date:today,delBody:null,exPick:'incline',open:new Set(),edit:null,plans:null,swapFor:null,sheet:false,month:today.slice(0,7),csv:null,imp:null};
 try{const t=localStorage.getItem('wk2-tab');if(t==='hist'||t==='body')st.tab=t}catch(e){}
 
 function lsLoad(){try{const j=JSON.parse(localStorage.getItem('wk2-data')||'{}');S.sessions=j.sessions||{};S.body=j.body||{};S.config=j.config||{}}catch(e){}applyProgram()}
@@ -454,7 +460,7 @@ async function initDb(){
 const sKey=()=>st.date+'_'+st.dow;
 function getSession(create){
   const k=sKey();let s=S.sessions[k];
-  if(!s&&create){s=S.sessions[k]={date:st.date,dow:st.dow,plan:PL.active,pn:P[st.dow]?P[st.dow].short:'',sets:{},updated:Date.now()}}
+  if(!s&&create){s=S.sessions[k]={date:st.date,dow:st.dow,plan:PL.active,pn:(dayInfo(st.dow,st.date).base||{}).short||'',sets:{},updated:Date.now()}}
   return s;
 }
 function lastFor(exId){
@@ -526,6 +532,38 @@ function sessionDone(s){if(!s||!s.sets)return 0;let n=0;for(const a of Object.va
 
 /* ---------- deload + the program actually shown for the open day ---------- */
 const wkStartOf=s=>{const d=parseYmd(s);return ymd(new Date(d.getFullYear(),d.getMonth(),d.getDate()-d.getDay()))};
+/* ---------- "วันนี้เป็นยังไง" : short day + moved/skipped days ---------- */
+// the 3 exercises kept on a short day; plans without an entry (or edited ones) fall back to the first non-abs exercises
+const KEY_EX={0:['goblet','bss','slrdl'],1:['incline','ohp','lateral'],2:['pullup','negpull','row'],4:['rdl','hipthrust','lateral'],5:['pullup','incline','lateral']};
+function keyIds(day,dow){
+  const ids=(KEY_EX[dow]||[]).filter(id=>day.ex.some(e=>e.id===id));
+  for(const e of day.ex){if(ids.length>=3)break;if(!e.abs&&!ids.includes(e.id))ids.push(e.id)}
+  return ids;
+}
+// S.config.moves = {weekStart: {fromDow: toDow | 'x'}} · 'x' = skipped
+const movesFor=date=>((S.config.moves||{})[wkStartOf(date)])||{};
+// what a weekday shows in the week of `date`: its own day, a day moved onto it, or "moved away / skipped"
+function dayInfo(dow,date){
+  const mv=movesFor(date),out=mv[dow];
+  if(P[dow])return out!=null&&(out==='x'||!P[out])?{base:P[dow],away:out}:{base:P[dow]};
+  const from=Object.keys(mv).find(f=>mv[f]===dow&&P[f]);
+  return from!=null?{base:P[from],from:+from}:{base:null};
+}
+// later rest days of that week (Sun–Sat) still free to take a moved workout
+function freeRestDays(from,date){
+  const mv=movesFor(date),taken=new Set(Object.values(mv));
+  const out=[];for(let d=from+1;d<7;d++)if(!P[d]&&!taken.has(d))out.push(d);
+  return out;
+}
+function setMove(from,to){
+  const all=clone(S.config.moves||{}),w=wkStartOf(st.date),old=wkStartOf(ymd(new Date(Date.now()-35*864e5)));
+  for(const k of Object.keys(all))if(k<old)delete all[k];
+  const m=all[w]||{};if(to==null)delete m[from];else m[from]=to;
+  if(Object.keys(m).length)all[w]=m;else delete all[w];
+  S.config.moves=all;queueSave('config','moves');
+}
+// minutes from the first ticked set to the last one (warm-up not included)
+const durMin=s=>s&&s.t0&&s.t1>s.t0?Math.max(1,Math.round((s.t1-s.t0)/60000)):null;
 const DELOAD_AFTER=6; // full training weeks before a deload is suggested
 function deloadInfo(){
   const dl=S.config.deload||{},cur=wkStartOf(st.date),weeks=new Set();
@@ -535,12 +573,16 @@ function deloadInfo(){
 }
 // today's list = the plan's day, with one-day swaps applied and sets halved in a deload week
 function curProg(){
-  const base=P[st.dow],s=getSession(false);
+  const di=dayInfo(st.dow,st.date),s=getSession(false);let base=di.base;
   if(!base){
     // rest day in the current plan, but an older session was logged here: show what was logged
     if(!s||sessionDone(s)===0)return null;
     const ex=Object.keys(s.sets||{}).map(id=>EXNAME[id]).filter(Boolean);
     return ex.length?{name:s.pn||'บันทึกเก่า',short:s.pn||'',warm:'',ex,old:true}:null;
+  }
+  if(s&&s.short){
+    const keep=new Set(keyIds(base,di.from!=null?di.from:st.dow));
+    base=Object.assign({},base,{ex:base.ex.filter(e=>keep.has(e.id)||exDoneCount(s,e.id)>0||exDoneCount(s,(s.swap&&s.swap[e.id]||{}).id)>0)});
   }
   const sw=(s&&s.swap)||{},dl=deloadInfo().active;
   if(!Object.keys(sw).length&&!dl)return base;
@@ -556,9 +598,10 @@ function curProg(){
 function renderDays(){
   const wk=weekDates(),todayDow=new Date().getDay();
   $('#days').innerHTML=DAYS.map((d,i)=>{
-    const p=P[i];
+    const di=dayInfo(i,st.date),p=di.away!=null?null:di.base;
+    const lbl=di.away==='x'?'ข้าม':di.away!=null?'→'+DAYS[di.away]:p?p.short:'พัก';
     const did=Object.values(S.sessions).some(s=>s&&s.dow===i&&wk.includes(s.date)&&sessionDone(s)>0);
-    return '<button class="day'+(p?'':' rest')+(i===todayDow?' today':'')+'" data-dow="'+i+'" aria-pressed="'+(st.tab==='train'&&st.dow===i)+'">'+(did?'<span class="dot" aria-label="ฝึกแล้วสัปดาห์นี้"></span>':'')+d+'<small>'+(p?p.short:'พัก')+'</small></button>';
+    return '<button class="day'+(p?'':' rest')+(i===todayDow?' today':'')+'" data-dow="'+i+'" aria-pressed="'+(st.tab==='train'&&st.dow===i)+'">'+(did?'<span class="dot" aria-label="ฝึกแล้วสัปดาห์นี้"></span>':'')+d+'<small>'+esc(lbl)+'</small></button>';
   }).join('');
 }
 function planChip(){return '<button class="planchip" data-plans>ตาราง: '+esc(PL.list[PL.active].name)+' ▾</button>'}
@@ -572,6 +615,12 @@ function renderTrain(){
   const m=$('#main');
   if(st.plans){renderPlans();return}
   if(st.edit&&st.edit.dow===st.dow){renderEditor();return}
+  const di=dayInfo(st.dow,st.date);
+  if(di.away!=null&&sessionDone(getSession(false))===0){
+    const to=di.away;
+    m.innerHTML='<div class="plan">'+planChip()+'<div class="ptop"><h1>วัน'+DAYFULL[st.dow]+' · '+(to==='x'?'ข้าม':'ย้ายไปวัน'+DAYFULL[to])+'</h1></div></div><div class="rest-card"><h2>'+(to==='x'?'พักวันนี้':esc(di.base.short)+' ย้ายไปเล่นวัน'+DAYFULL[to])+'</h2><div class="note">'+(to==='x'?'ป่วยหรือไม่ไหวให้พักจริงๆ ไม่ต้องเล่นชดเชย สัปดาห์หน้าเล่นตามตารางปกติ':'วันนี้พัก ไปเล่นตามโปรแกรมนี้ในวัน'+DAYFULL[to])+'</div><ul><li>นอนให้พอ 7–9 ชั่วโมง</li><li>ดื่มน้ำ กินโปรตีนให้ถึงเป้า</li><li>ถ้าป่วยมีไข้ อย่าฝืนออกกำลังกาย</li></ul><div class="edbar"><button class="btn small ghost" data-unmove>ยกเลิก · กลับมาเล่นวันนี้</button></div></div>';
+    return;
+  }
   const p=curProg();
   if(!p){
     m.innerHTML='<div class="plan">'+planChip()+'<div class="ptop"><h1>วัน'+DAYFULL[st.dow]+' · พัก</h1><button class="btn small ghost" data-newday>ตั้งเป็นวันฝึก</button></div></div><div class="rest-card"><h2>พักเต็มวัน</h2><div class="note">กล้ามโตตอนพัก ไม่ใช่ตอนเล่น</div><ul><li>เดินให้ได้ 8,000–10,000 ก้าว</li><li>ยืดเหยียด 10 นาทีถ้าตึง</li><li>นอน 7–9 ชั่วโมง</li><li>โปรตีนยังต้องถึงเป้าเหมือนวันฝึก</li></ul></div>';
@@ -579,8 +628,8 @@ function renderTrain(){
   }
   const s=getSession(false);
   const total=p.ex.reduce((a,e)=>a+e.s,0),done=sessionDone(s);
-  let h='<div class="plan">'+planChip()+'<div class="ptop"><h1>'+esc(p.name)+'</h1>'+(p.old?'':'<button class="btn small ghost" data-edit>แก้ตาราง</button>')+'</div>'+(p.old?'<div class="note">บันทึกเก่า: วันนี้เป็นวันพักในตารางที่ใช้อยู่</div>':'')+'<div class="sub"><label for="dt">วันที่บันทึก <input type="date" id="dt" value="'+st.date+'" max="'+today+'"></label><span>'+(st.date===today?'วันนี้':thDate(st.date))+'</span></div>';
-  h+='<div class="barrow"><div class="bar"><span id="pbar" style="width:'+(total?done/total*100:0)+'%"></span></div><span class="num" id="prog">'+done+'/'+total+' เซต</span></div>';
+  let h='<div class="plan">'+planChip()+'<div class="ptop"><h1>'+esc(p.name)+'</h1>'+(p.old||di.from!=null?'':'<button class="btn small ghost" data-edit>แก้ตาราง</button>')+'</div>'+(p.old?'<div class="note">บันทึกเก่า: วันนี้เป็นวันพักในตารางที่ใช้อยู่</div>':'')+(di.from!=null?'<div class="note">ย้ายมาจากวัน'+DAYFULL[di.from]+' · <button class="linkbtn" data-unmove="'+di.from+'">ยกเลิกการย้าย</button></div>':'')+(p.old?'':'<div class="edbar" style="margin:0"><button class="btn small'+(s&&s.short?'':' ghost')+'" data-sheet>'+(s&&s.short?'⏱ โหมดเวลาน้อย · เปลี่ยน':'⏱ วันนี้เวลาน้อย / ไม่ไหว?')+'</button></div>')+'<div class="sub"><label for="dt">วันที่บันทึก <input type="date" id="dt" value="'+st.date+'" max="'+today+'"></label><span>'+(st.date===today?'วันนี้':thDate(st.date))+'</span></div>';
+  h+='<div class="barrow"><div class="bar"><span id="pbar" style="width:'+(total?done/total*100:0)+'%"></span></div><span class="num" id="prog">'+progText(done,total,s)+'</span></div>';
   h+=deloadHtml();
   if(p.warm)h+='<details class="warm"><summary>วอร์มอัพ</summary><p>'+esc(p.warm)+'</p></details>';
   h+='</div><div class="list">';
@@ -591,7 +640,25 @@ function renderTrain(){
   });
   h+='<div class="card"><h2>โน้ตวันนี้</h2><textarea id="note" placeholder="เช่น นอนน้อย แรงตก / ไหล่ขวาตึงนิดๆ / วันนี้ฟอร์มดี">'+esc(s&&s.note||'')+'</textarea></div>';
   h+='<div id="sum">'+summaryHtml()+'</div></div>';
+  if(st.sheet&&!p.old)h+=sheetHtml(p,s,di);
   m.innerHTML=h;
+}
+const progText=(dn,tot,s)=>dn+'/'+tot+' เซต'+(durMin(s)?' · ⏱ '+durMin(s)+' นาที':'');
+// the "วันนี้เป็นยังไง" popup
+function sheetHtml(p,s,di){
+  const base=di.base,src=di.from!=null?di.from:st.dow,keep=keyIds(base,src).map(id=>(base.ex.find(e=>e.id===id)||{}).n).filter(Boolean);
+  const short=!!(s&&s.short),done=sessionDone(s)>0;
+  let h='<div class="sheetbg" data-sheetx></div><div class="sheet" role="dialog" aria-modal="true" aria-label="วันนี้เป็นยังไง"><h2>วันนี้เป็นยังไง?</h2>';
+  h+='<div class="opt"><b>⏱ เวลาน้อย (~35–45 นาที)</b><div class="note">เหลือ 3 ท่าหลัก เซตเท่าเดิม: '+esc(keep.join(', '))+'</div><div class="note">ท่าที่ไม่ได้เล่นจะไม่ทำให้คำแนะนำลดน้ำหนัก</div><div class="edbar"><button class="btn small'+(short?' ghost':'')+'" data-short>'+(short?'กลับไปเล่นเต็ม':'ใช้โหมดเวลาน้อย')+'</button></div></div>';
+  if(di.from==null){
+    if(done)h+='<div class="opt"><b>🛌 ไม่ไหว / ป่วย / ไม่มีเวลาเลย</b><div class="note">วันนี้ติ๊กเซตไปแล้ว ย้ายหรือข้ามไม่ได้ ถ้าไม่ไหวหยุดตรงนี้ได้เลย</div></div>';
+    else{
+      const free=freeRestDays(st.dow,st.date);
+      h+='<div class="opt"><b>🛌 ไม่ไหว / ป่วย / ไม่มีเวลาเลย</b><div class="note">ย้ายโปรแกรมวันนี้ไปวันพัก หรือข้ามไปเลย · อย่าเล่น 2 วันรวมกันเพื่อชดเชย</div><div class="edbar">'+free.map((d,i)=>'<button class="btn small'+(i?' ghost':'')+'" data-move="'+d+'">ย้ายไปวัน'+DAYFULL[d]+(i?'':' (แนะนำ)')+'</button>').join('')+'<button class="btn small ghost" data-skip>ข้ามวันนี้ · พัก</button></div>'+(free.length?'':'<div class="note">สัปดาห์นี้ไม่มีวันพักว่างแล้ว ข้ามได้อย่างเดียว</div>')+'</div>';
+    }
+  }
+  h+='<div class="edbar"><button class="btn ghost" data-sheetx>ปิด</button></div></div>';
+  return h;
 }
 // one-day swap: the pill on a swapped exercise, and the picker while choosing
 function swapHtml(e){
@@ -713,7 +780,7 @@ function exCard(e,n,s){
       '<td>'+stp('r',x.r,lx&&lx.r||(e.u==='max'?'':e.r[1]),rStep,'numeric',e.u==='sec'?'วินาที':'จำนวนครั้ง')+'</td>'+
       '<td><button class="chk" aria-label="ทำเซต '+(i+1)+' เสร็จ" aria-pressed="'+!!x.d+'"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button></td></tr>';
   }
-  h+='</tbody></table>'+(isDone?'<div class="rate"><span>เซตสุดท้ายเป็นยังไง? ต้องกดถึงจะแนะนำให้เพิ่มน้ำหนัก · ต้องเหวี่ยงหรือโกงท่าถึงจะครบ ให้กดฝืน</span><div>'+['e','ok','h'].map(k=>'<button class="btn small'+(fx===k?'':' ghost')+'" data-rate="'+k+'" aria-pressed="'+(fx===k)+'">'+FX[k]+'</button>').join('')+'</div></div>':'')+'<details class="how"><summary>วิธีทำ</summary><p>'+esc(e.c)+'</p>'+(e.band?'<p class="note">ตัวคล้องประตู: เสียบฝั่งบานพับ ปิดประตูแล้วล็อก ยืนฝั่งที่ดึงแล้วประตูยิ่งปิดแน่น (ประตูเปิดออกไปอีกฝั่ง) · ยางเบาไปเกี่ยวเพิ่มอีกเส้นได้</p>':'')+'<p class="note">พักระหว่างเซตประมาณ '+e.rest+' วินาที</p>'+(P[st.dow]?'<p style="margin:0 0 8px"><button class="btn small ghost" data-swap="'+(e.swapOf||e.id)+'">เปลี่ยนท่าเฉพาะวันนี้</button></p>':'')+'<a href="https://www.youtube.com/results?search_query='+encodeURIComponent(e.n.replace(/^Superset: /,'')+' form')+'" target="_blank" rel="noopener">ดูคลิปท่านี้บน YouTube ↗</a></details></section>';
+  h+='</tbody></table>'+(isDone?'<div class="rate"><span>เซตสุดท้ายเป็นยังไง? ต้องกดถึงจะแนะนำให้เพิ่มน้ำหนัก · ต้องเหวี่ยงหรือโกงท่าถึงจะครบ ให้กดฝืน</span><div>'+['e','ok','h'].map(k=>'<button class="btn small'+(fx===k?'':' ghost')+'" data-rate="'+k+'" aria-pressed="'+(fx===k)+'">'+FX[k]+'</button>').join('')+'</div></div>':'')+'<details class="how"><summary>วิธีทำ</summary><p>'+esc(e.c)+'</p>'+(e.band?'<p class="note">ตัวคล้องประตู: เสียบฝั่งบานพับ ปิดประตูแล้วล็อก ยืนฝั่งที่ดึงแล้วประตูยิ่งปิดแน่น (ประตูเปิดออกไปอีกฝั่ง) · ยางเบาไปเกี่ยวเพิ่มอีกเส้นได้</p>':'')+'<p class="note">พักระหว่างเซตประมาณ '+e.rest+' วินาที</p>'+(dayInfo(st.dow,st.date).base?'<p style="margin:0 0 8px"><button class="btn small ghost" data-swap="'+(e.swapOf||e.id)+'">เปลี่ยนท่าเฉพาะวันนี้</button></p>':'')+'<a href="https://www.youtube.com/results?search_query='+encodeURIComponent(e.n.replace(/^Superset: /,'')+' form')+'" target="_blank" rel="noopener">ดูคลิปท่านี้บน YouTube ↗</a></details></section>';
   return h;
 }
 function summaryHtml(){
@@ -734,7 +801,7 @@ function summaryHtml(){
     }
   });
   const all=done>=total;
-  return '<section class="sum" id="sumcard"><h2>'+(all?'จบวันนี้แล้ว 💪':'สรุประหว่างฝึก')+'</h2><div class="big">'+done+'/'+total+' <span class="note">เซต</span></div>'+
+  return '<section class="sum" id="sumcard"><h2>'+(all?'จบวันนี้แล้ว 💪':'สรุประหว่างฝึก')+'</h2><div class="big">'+done+'/'+total+' <span class="note">เซต'+(durMin(s)?' · ใช้เวลา '+durMin(s)+' นาที (ไม่รวมวอร์ม)':'')+'</span></div>'+
     (wins.length?'<div class="note" style="margin-top:6px">ดีกว่าครั้งก่อน</div><ul>'+wins.map(w=>'<li><span>'+esc(w[0])+'</span><span>'+w[1]+'</span></li>').join('')+'</ul>':'<div class="note" style="margin-top:6px">'+(Object.keys(S.sessions).length>1?'ยังไม่มีท่าที่ทำได้มากกว่าครั้งก่อน ไม่เป็นไร ทำต่อสม่ำเสมอ':'ครั้งแรก จดไว้เป็นฐาน ครั้งหน้าจะเทียบให้')+'</div>')+'</section>';
 }
 function chart(pts,unit){
@@ -765,10 +832,14 @@ function renderHist(){
   const opts=Object.values(EXNAME);
   const e=EXNAME[st.exPick]||opts[0];
   const pts=[];
-  list.slice().reverse().forEach(([k,s])=>{const a=(s.sets[e.id]||[]).filter(x=>x&&x.d);if(!a.length)return;const v=e.bw?Math.max(...a.map(x=>num(x.r)||0)):Math.max(...a.map(x=>num(x.w)||0));if(v>0)pts.push({x:s.date,y:v})});
+  list.slice().reverse().forEach(([k,s])=>{const a=(s.sets[e.id]||[]).filter(x=>x&&x.d);if(!a.length)return;const v=e.bw?(e.u==='sec'?Math.max(...a.map(x=>num(x.r)||0)):a.reduce((t,x)=>t+(num(x.r)||0),0)):Math.max(...a.map(x=>num(x.w)||0));if(v>0)pts.push({x:s.date,y:v})});
   let h='<div class="panel"><div class="card"><h2>สัปดาห์นี้</h2><div class="stats"><div class="stat"><div class="v num">'+thisWeek+'<small>/'+Object.values(P).filter(Boolean).length+'</small></div><div class="k">วันที่ฝึก</div></div><div class="stat"><div class="v num">'+streak+'<small>สัปดาห์</small></div><div class="k">ฝึกต่อเนื่อง</div></div><div class="stat"><div class="v num">'+list.length+'</div><div class="k">ครั้งทั้งหมด</div></div></div></div>';
-  h+='<div class="card"><h2>พัฒนาการรายท่า</h2><label class="note" for="exsel">เลือกท่า</label><select id="exsel">'+opts.map(o=>'<option value="'+o.id+'"'+(o.id===e.id?' selected':'')+'>'+esc(o.n)+'</option>').join('')+'</select><div class="note" style="margin:8px 0 2px">'+(e.bw?(e.u==='sec'?'วินาทีสูงสุดต่อครั้ง':'จำนวนครั้งสูงสุดต่อเซต'):'น้ำหนักสูงสุดที่ใช้ (กก.)')+'</div>'+chart(pts,e.n)+'</div>';
-  h+='<div class="card"><h2>ประวัติการฝึก</h2>'+(list.length?list.slice(0,40).map(([k,s])=>{const p=P[s.dow];return '<button class="rowbtn" data-open="'+esc(k)+'"><div class="row"><span>'+thDate(s.date)+' · '+esc(s.pn||(p?p.short:''))+'</span><span class="r num">'+sessionDone(s)+' เซต ›</span></div></button>'}).join(''):'<div class="empty">ยังไม่มีบันทึก เริ่มจากแท็บ "ฝึก" แล้วติ๊กเซตที่ทำเสร็จ</div>')+'</div>';
+  h+='<div class="card"><h2>พัฒนาการรายท่า</h2><label class="note" for="exsel">เลือกท่า</label><select id="exsel">'+opts.map(o=>'<option value="'+o.id+'"'+(o.id===e.id?' selected':'')+'>'+esc(o.n)+'</option>').join('')+'</select><div class="note" style="margin:8px 0 2px">'+(e.bw?(e.u==='sec'?'วินาทีสูงสุดต่อครั้ง':'จำนวนครั้งรวมทั้งวัน (ทุกเซตรวมกัน)'):'น้ำหนักสูงสุดที่ใช้ (กก.)')+'</div>'+chart(pts,e.n)+'</div>';
+  // average time of the last 4 full (not short-mode) sessions of each program day
+  const tm={};list.forEach(([k,s])=>{const m_=durMin(s);if(!m_||s.short)return;const n=s.pn||'–';(tm[n]=tm[n]||[]).length<4&&tm[n].push(m_)});
+  const tmr=Object.entries(tm);
+  if(tmr.length)h+='<div class="card"><h2>เวลาฝึกเฉลี่ย</h2><div class="note" style="margin-bottom:6px">จากเซตแรกถึงเซตสุดท้าย ไม่รวมวอร์ม · เฉลี่ย 4 ครั้งล่าสุด</div>'+tmr.map(([n,a])=>{const av=Math.round(a.reduce((x,y)=>x+y,0)/a.length);return '<div class="row"><span>'+esc(n)+'</span><span class="r num">'+av+' นาที'+(av>90?' · นานเกิน':'')+'</span></div>'}).join('')+'</div>';
+  h+='<div class="card"><h2>ประวัติการฝึก</h2>'+(list.length?list.slice(0,40).map(([k,s])=>{const p=P[s.dow];return '<button class="rowbtn" data-open="'+esc(k)+'"><div class="row"><span>'+thDate(s.date)+' · '+esc(s.pn||(p?p.short:''))+'</span><span class="r num">'+(durMin(s)?durMin(s)+' นาที · ':'')+sessionDone(s)+' เซต ›</span></div></button>'}).join(''):'<div class="empty">ยังไม่มีบันทึก เริ่มจากแท็บ "ฝึก" แล้วติ๊กเซตที่ทำเสร็จ</div>')+'</div>';
   h+=monthHtml();
   let lastBk=null;try{lastBk=localStorage.getItem('wk2-lastbackup')}catch(e){}
   const bkOld=STANDALONE&&(!lastBk||(Date.now()-parseYmd(lastBk).getTime())>30*864e5);
@@ -831,7 +902,7 @@ function importData(d){
   let ns=0,nb=0,cfg=false;
   for(const [k,v] of Object.entries(d.sessions||{})){if(!okId(k)||!v||typeof v!=='object'||typeof v.date!=='string')continue;S.sessions[k]=clone(v);queueSave('sessions',k);ns++}
   for(const [k,v] of Object.entries(d.body||{})){if(!okId(k)||!v||typeof v!=='object'||num(v.weight)==null)continue;S.body[k]=clone(v);queueSave('body',k);nb++}
-  for(const k of ['program','plans','deload']){if(d.config&&d.config[k]&&typeof d.config[k]==='object'){S.config[k]=clone(d.config[k]);queueSave('config',k);if(k!=='deload')cfg=true}}
+  for(const k of ['program','plans','deload','moves']){if(d.config&&d.config[k]&&typeof d.config[k]==='object'){S.config[k]=clone(d.config[k]);queueSave('config',k);if(k!=='deload'&&k!=='moves')cfg=true}}
   applyProgram();
   return {ns,nb,cfg};
 }
@@ -902,7 +973,7 @@ document.addEventListener('visibilitychange',()=>{if(!document.hidden)checkRollo
 setInterval(checkRollover,60000);
 
 /* ---------- events ---------- */
-$('#days').addEventListener('click',ev=>{const b=ev.target.closest('.day');if(!b)return;st.dow=+b.dataset.dow;st.edit=null;st.plans=null;st.swapFor=null;st.tab='train';render();scrollTo(0,0)});
+$('#days').addEventListener('click',ev=>{const b=ev.target.closest('.day');if(!b)return;st.dow=+b.dataset.dow;st.sheet=false;st.edit=null;st.plans=null;st.swapFor=null;st.tab='train';render();scrollTo(0,0)});
 document.querySelector('.tabs').addEventListener('click',ev=>{const b=ev.target.closest('.tab');if(!b)return;st.tab=b.dataset.tab;st.delBody=null;st.plans=null;st.swapFor=null;try{localStorage.setItem('wk2-tab',st.tab)}catch(e){}render();scrollTo(0,0)});
 $('#main').addEventListener('input',ev=>{
   const t=ev.target;
@@ -937,7 +1008,7 @@ function setField(exId,i,f,val){
 }
 function refreshProgress(){
   const p=curProg(),s=getSession(false),tot=p.ex.reduce((a,e)=>a+e.s,0),dn=sessionDone(s);
-  $('#prog').textContent=dn+'/'+tot+' เซต';$('#pbar').style.width=(dn/tot*100)+'%';
+  $('#prog').textContent=progText(dn,tot,s);$('#pbar').style.width=(dn/tot*100)+'%';
   $('#sum').innerHTML=summaryHtml();
   renderDays();
   return dn>=tot;
@@ -977,6 +1048,13 @@ $('#main').addEventListener('click',ev=>{
   let v;
   if(T('[data-plans]')){st.plans={};st.edit=null;st.swapFor=null;render();scrollTo(0,0);return}
   if(T('[data-newday]')){st.edit={dow:st.dow,isNew:true,name:'',short:'',warm:'',ex:[]};render();scrollTo(0,0);return}
+  // "วันนี้เป็นยังไง" popup
+  if(T('[data-sheet]')){st.sheet=true;reTrain();return}
+  if(T('[data-sheetx]')){st.sheet=false;reTrain();return}
+  if(T('[data-short]')){const s=getSession(true);if(s.short)delete s.short;else s.short=1;s.updated=Date.now();queueSave('sessions',sKey());st.sheet=false;reTrain();return}
+  if((v=B('data-move'))!=null){setMove(st.dow,+v);st.sheet=false;renderDays();reTrain();return}
+  if(T('[data-skip]')){setMove(st.dow,'x');st.sheet=false;renderDays();reTrain();return}
+  if((v=B('data-unmove'))!=null){setMove(v===''?st.dow:+v,null);renderDays();reTrain();return}
   if(T('[data-edit]')&&P[st.dow]){const p=P[st.dow];st.swapFor=null;st.edit={dow:st.dow,name:p.name,short:p.short,warm:p.warm,ex:clone(p.ex)};render();scrollTo(0,0);return}
   // deload week
   if(T('[data-dlstart]')){const o={week:wkStartOf(today)},pv=(S.config.deload||{}).week;if(pv)o.prev=pv;S.config.deload=o;queueSave('config','deload');reTrain();return}
@@ -987,7 +1065,7 @@ $('#main').addEventListener('click',ev=>{
   if(T('[data-swapno]')){st.swapFor=null;reTrain();return}
   if((v=B('data-unswap'))){const s=getSession(true);if(s.swap){delete s.swap[v];s.updated=Date.now();queueSave('sessions',sKey())}st.swapFor=null;reTrain();return}
   if((v=B('data-swapok'))){
-    const base=P[st.dow]&&P[st.dow].ex.find(x=>x.id===v);if(!base)return;
+    const db_=dayInfo(st.dow,st.date).base,base=db_&&db_.ex.find(x=>x.id===v);if(!base)return;
     const nm=($('#swapnew').value||'').trim(),sel=$('#swapsel').value;let ex=null;
     if(nm){const hit=Object.values(EXNAME).find(x=>x.n.toLowerCase()===nm.toLowerCase());ex=hit?clone(hit):Object.assign(clone(base),{id:'c'+Date.now().toString(36),n:nm,c:''})}
     else if(sel&&EXNAME[sel])ex=clone(EXNAME[sel]);
@@ -1076,7 +1154,7 @@ $('#main').addEventListener('click',ev=>{
     tr.classList.toggle('done',x.d);c.setAttribute('aria-pressed',x.d);
     const nowDone=arr.filter(z=>z.d).length>=e.s;
     sec.classList.toggle('complete',nowDone);
-    if(x.d){s.ns=s.ns||{};s.ns[exId]=e.s;if(deloadInfo().active)s.dl=1}
+    if(x.d){s.ns=s.ns||{};s.ns[exId]=e.s;if(deloadInfo().active)s.dl=1;const now=Date.now();if(!s.t0)s.t0=now;s.t1=now}
     s.updated=Date.now();queueSave('sessions',sKey());
     refreshProgress();
     if(nowDone!==wasDone){
