@@ -477,7 +477,7 @@ function histFor(exId){
   }
   return out.sort((a,b)=>a.s.date<b.s.date?1:a.s.date>b.s.date?-1:(b.s.updated||0)-(a.s.updated||0));
 }
-const FX={e:'ง่าย เหลือแรง',ok:'พอดี',h:'ฝืน/ฟอร์มหลุด'};
+const FX={e:'ง่าย เหลือแรง',ok:'พอดี',h:'ฝืน / เหวี่ยงช่วย / ฟอร์มหลุด'};
 // what one past session says: target met? any set under the range? how hard it felt
 function judge(e,h){
   const reps=h.arr.map(x=>num(x.r)||0),ws=h.arr.map(x=>num(x.w)).filter(x=>x!=null);
@@ -498,7 +498,7 @@ function hint(e){
   const sameLoad=x=>!!x&&(e.bw||(x.same&&x.top===a.top));
   if(e.u==='max'){
     const best=Math.max(...a.reps);
-    if(best>=hi)return a.fx==='h'?P_('hold','ถึง '+hi+' ครั้งแล้วแต่ยังฝืน · ทำให้นิ่งอีกครั้งก่อน'):P_('up','ทำได้ '+hi+' ครั้งแล้ว · ลองถ่วงน้ำหนัก');
+    if(best>=hi)return a.fx==='h'?P_('hold','ถึง '+hi+' ครั้งแล้วแต่ยังฝืน · ทำให้นิ่งอีกครั้งก่อน'):a.fx?P_('up','ทำได้ '+hi+' ครั้งแล้ว · ลองถ่วงน้ำหนัก'):P_('hold','ถึง '+hi+' ครั้งแล้ว · กดบอกความยากหลังเล่น ถ้าง่ายหรือพอดีค่อยถ่วงน้ำหนัก');
     return P_('hold','เป้า '+hi+' ครั้ง · ล่าสุดสูงสุด '+best+' · วันนี้ลอง '+(best+1));
   }
   // same load three times running without getting anywhere
@@ -506,16 +506,16 @@ function hint(e){
     return P_('down',e.bw?'ค้างมา 3 ครั้ง · พักให้พอ แล้วลดเป้าลงเล็กน้อยค่อยไล่ใหม่':'ค้างที่ '+fmt(a.top)+' กก. มา 3 ครั้ง · ลดเหลือ ~'+half(a.top*0.9)+' กก. แล้วไล่ขึ้นใหม่');
   if(a.met){
     if(!a.same)return P_('hold','ครบแล้วแต่น้ำหนักไม่เท่ากัน · ทำให้ครบที่ '+fmt(a.top)+' กก. ทุกเซต');
-    if(a.fx==='h')return P_('hold','ครบแล้วแต่ยังฝืน · น้ำหนักเดิมอีกครั้งให้ฟอร์มนิ่ง');
-    const twice=!!b&&b.met&&sameLoad(b)&&b.fx!=='h';
-    if(a.fx||twice){
-      const why=a.fx?FX[a.fx]:'2 ครั้งติด';
+    if(a.fx==='h')return P_('hold','ครบแล้วแต่ฝืนหรือเหวี่ยงช่วย · น้ำหนักเดิมอีกครั้งให้ฟอร์มนิ่ง');
+    // only a set the user says felt easy or right counts as earned; no rating, no increase
+    if(a.fx){
+      const why=FX[a.fx];
       if(e.bw)return P_('up','ครบเป้า ('+why+') · เพิ่มครั้ง/เวลา หรือใช้ยางแข็งขึ้น');
       const big=a.fx==='e',st_=a.top<6?[0.5,big?1:0.5]:(big?[1,2.5]:[0.5,1]);
       const rng=st_[0]===st_[1]?half(a.top+st_[0]):half(a.top+st_[0])+'–'+half(a.top+st_[1]);
       return P_('up','↑ ครบแล้ว ('+why+') · ลอง '+rng+' กก.');
     }
-    return P_('hold','ครบ 1 ครั้ง · ทำซ้ำให้ครบอีกครั้ง หรือกดบอกความยากหลังเล่น แล้วค่อยเพิ่ม');
+    return P_('hold','ครบแล้วแต่ยังไม่ได้บอกความยาก · น้ำหนักเดิม · ครั้งนี้เล่นจบแล้วกดบอกว่าเซตสุดท้ายเป็นยังไง');
   }
   if(a.low)return e.bw?P_('hold','บางเซตยังไม่ถึง '+lo+' · ทำให้ถึง '+lo+' ทุกเซตก่อน'):P_('down','บางเซตไม่ถึง '+lo+' ครั้ง · หนักไป ลองลดเหลือ ~'+half(a.top-(a.top<6?0.5:1))+' กก.');
   if(H[0].arr.length<a.need)return P_('hold','ครั้งก่อนเล่น '+H[0].arr.length+'/'+a.need+' เซต · น้ำหนักเดิม เล่นให้ครบเซต');
@@ -713,7 +713,7 @@ function exCard(e,n,s){
       '<td>'+stp('r',x.r,lx&&lx.r||(e.u==='max'?'':e.r[1]),rStep,'numeric',e.u==='sec'?'วินาที':'จำนวนครั้ง')+'</td>'+
       '<td><button class="chk" aria-label="ทำเซต '+(i+1)+' เสร็จ" aria-pressed="'+!!x.d+'"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button></td></tr>';
   }
-  h+='</tbody></table>'+(isDone?'<div class="rate"><span>เซตสุดท้ายเป็นยังไง? (ใช้ตัดสินว่าครั้งหน้าควรเพิ่มน้ำหนักไหม)</span><div>'+['e','ok','h'].map(k=>'<button class="btn small'+(fx===k?'':' ghost')+'" data-rate="'+k+'" aria-pressed="'+(fx===k)+'">'+FX[k]+'</button>').join('')+'</div></div>':'')+'<details class="how"><summary>วิธีทำ</summary><p>'+esc(e.c)+'</p>'+(e.band?'<p class="note">ตัวคล้องประตู: เสียบฝั่งบานพับ ปิดประตูแล้วล็อก ยืนฝั่งที่ดึงแล้วประตูยิ่งปิดแน่น (ประตูเปิดออกไปอีกฝั่ง) · ยางเบาไปเกี่ยวเพิ่มอีกเส้นได้</p>':'')+'<p class="note">พักระหว่างเซตประมาณ '+e.rest+' วินาที</p>'+(P[st.dow]?'<p style="margin:0 0 8px"><button class="btn small ghost" data-swap="'+(e.swapOf||e.id)+'">เปลี่ยนท่าเฉพาะวันนี้</button></p>':'')+'<a href="https://www.youtube.com/results?search_query='+encodeURIComponent(e.n.replace(/^Superset: /,'')+' form')+'" target="_blank" rel="noopener">ดูคลิปท่านี้บน YouTube ↗</a></details></section>';
+  h+='</tbody></table>'+(isDone?'<div class="rate"><span>เซตสุดท้ายเป็นยังไง? ต้องกดถึงจะแนะนำให้เพิ่มน้ำหนัก · ต้องเหวี่ยงหรือโกงท่าถึงจะครบ ให้กดฝืน</span><div>'+['e','ok','h'].map(k=>'<button class="btn small'+(fx===k?'':' ghost')+'" data-rate="'+k+'" aria-pressed="'+(fx===k)+'">'+FX[k]+'</button>').join('')+'</div></div>':'')+'<details class="how"><summary>วิธีทำ</summary><p>'+esc(e.c)+'</p>'+(e.band?'<p class="note">ตัวคล้องประตู: เสียบฝั่งบานพับ ปิดประตูแล้วล็อก ยืนฝั่งที่ดึงแล้วประตูยิ่งปิดแน่น (ประตูเปิดออกไปอีกฝั่ง) · ยางเบาไปเกี่ยวเพิ่มอีกเส้นได้</p>':'')+'<p class="note">พักระหว่างเซตประมาณ '+e.rest+' วินาที</p>'+(P[st.dow]?'<p style="margin:0 0 8px"><button class="btn small ghost" data-swap="'+(e.swapOf||e.id)+'">เปลี่ยนท่าเฉพาะวันนี้</button></p>':'')+'<a href="https://www.youtube.com/results?search_query='+encodeURIComponent(e.n.replace(/^Superset: /,'')+' form')+'" target="_blank" rel="noopener">ดูคลิปท่านี้บน YouTube ↗</a></details></section>';
   return h;
 }
 function summaryHtml(){
