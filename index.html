@@ -562,7 +562,7 @@ function setMove(from,to){
   if(Object.keys(m).length)all[w]=m;else delete all[w];
   S.config.moves=all;queueSave('config','moves');
 }
-// minutes from the first ticked set to the last one (warm-up not included)
+// minutes from the start (the ▶ button at warm-up, or the first ticked set) to the last ticked set, rests included
 const durMin=s=>s&&s.t0&&s.t1>s.t0?Math.max(1,Math.round((s.t1-s.t0)/60000)):null;
 const DELOAD_AFTER=6; // full training weeks before a deload is suggested
 function deloadInfo(){
@@ -629,7 +629,7 @@ function renderTrain(){
   const s=getSession(false);
   const total=p.ex.reduce((a,e)=>a+e.s,0),done=sessionDone(s);
   let h='<div class="plan">'+planChip()+'<div class="ptop"><h1>'+esc(p.name)+'</h1>'+(p.old||di.from!=null?'':'<button class="btn small ghost" data-edit>แก้ตาราง</button>')+'</div>'+(p.old?'<div class="note">บันทึกเก่า: วันนี้เป็นวันพักในตารางที่ใช้อยู่</div>':'')+(di.from!=null?'<div class="note">ย้ายมาจากวัน'+DAYFULL[di.from]+' · <button class="linkbtn" data-unmove="'+di.from+'">ยกเลิกการย้าย</button></div>':'')+(p.old?'':'<div class="edbar" style="margin:0"><button class="btn small'+(s&&s.short?'':' ghost')+'" data-sheet>'+(s&&s.short?'⏱ โหมดเวลาน้อย · เปลี่ยน':'⏱ วันนี้เวลาน้อย / ไม่ไหว?')+'</button></div>')+'<div class="sub"><label for="dt">วันที่บันทึก <input type="date" id="dt" value="'+st.date+'" max="'+today+'"></label><span>'+(st.date===today?'วันนี้':thDate(st.date))+'</span></div>';
-  h+='<div class="barrow"><div class="bar"><span id="pbar" style="width:'+(total?done/total*100:0)+'%"></span></div><span class="num" id="prog">'+progText(done,total,s)+'</span></div>';
+  h+='<div class="barrow"><div class="bar"><span id="pbar" style="width:'+(total?done/total*100:0)+'%"></span></div><span class="num" id="prog">'+progText(done,total,s)+'</span></div>'+(st.date===today&&!(s&&s.t0)&&!p.old?'<div class="edbar" style="margin:0"><button class="btn small ghost" data-tstart>▶ เริ่มจับเวลา (กดตอนเริ่มวอร์ม)</button><span class="note" style="align-self:center">ไม่กดก็ได้ จะเริ่มนับเองตอนติ๊กเซตแรก</span></div>':'');
   h+=deloadHtml();
   if(p.warm)h+='<details class="warm"><summary>วอร์มอัพ</summary><p>'+esc(p.warm)+'</p></details>';
   h+='</div><div class="list">';
@@ -643,7 +643,13 @@ function renderTrain(){
   if(st.sheet&&!p.old)h+=sheetHtml(p,s,di);
   m.innerHTML=h;
 }
-const progText=(dn,tot,s)=>dn+'/'+tot+' เซต'+(durMin(s)?' · ⏱ '+durMin(s)+' นาที':'');
+// while a workout is under way today the clock runs on its own; once every set is ticked it stops at the last tick
+const clockOn=(dn,tot,s)=>!!(s&&s.t0)&&dn<tot&&st.date===today&&Date.now()-s.t0<4*36e5;
+const hm=t=>{const d=new Date(t);return pad(d.getHours())+':'+pad(d.getMinutes())};
+function progText(dn,tot,s){
+  if(clockOn(dn,tot,s))return dn+'/'+tot+' เซต · ⏱ '+Math.floor((Date.now()-s.t0)/60000)+' นาที (เริ่ม '+hm(s.t0)+')';
+  return dn+'/'+tot+' เซต'+(durMin(s)?' · ⏱ '+durMin(s)+' นาที':'');
+}
 // the "วันนี้เป็นยังไง" popup
 function sheetHtml(p,s,di){
   const base=di.base,src=di.from!=null?di.from:st.dow,keep=keyIds(base,src).map(id=>(base.ex.find(e=>e.id===id)||{}).n).filter(Boolean);
@@ -801,7 +807,7 @@ function summaryHtml(){
     }
   });
   const all=done>=total;
-  return '<section class="sum" id="sumcard"><h2>'+(all?'จบวันนี้แล้ว 💪':'สรุประหว่างฝึก')+'</h2><div class="big">'+done+'/'+total+' <span class="note">เซต'+(durMin(s)?' · ใช้เวลา '+durMin(s)+' นาที (ไม่รวมวอร์ม)':'')+'</span></div>'+
+  return '<section class="sum" id="sumcard"><h2>'+(all?'จบวันนี้แล้ว 💪':'สรุประหว่างฝึก')+'</h2><div class="big">'+done+'/'+total+' <span class="note">เซต'+(durMin(s)?' · ใช้เวลา '+durMin(s)+' นาที (รวมเวลาพัก)':'')+'</span></div>'+
     (wins.length?'<div class="note" style="margin-top:6px">ดีกว่าครั้งก่อน</div><ul>'+wins.map(w=>'<li><span>'+esc(w[0])+'</span><span>'+w[1]+'</span></li>').join('')+'</ul>':'<div class="note" style="margin-top:6px">'+(Object.keys(S.sessions).length>1?'ยังไม่มีท่าที่ทำได้มากกว่าครั้งก่อน ไม่เป็นไร ทำต่อสม่ำเสมอ':'ครั้งแรก จดไว้เป็นฐาน ครั้งหน้าจะเทียบให้')+'</div>')+'</section>';
 }
 function chart(pts,unit){
@@ -838,7 +844,7 @@ function renderHist(){
   // average time of the last 4 full (not short-mode) sessions of each program day
   const tm={};list.forEach(([k,s])=>{const m_=durMin(s);if(!m_||s.short)return;const n=s.pn||'–';(tm[n]=tm[n]||[]).length<4&&tm[n].push(m_)});
   const tmr=Object.entries(tm);
-  if(tmr.length)h+='<div class="card"><h2>เวลาฝึกเฉลี่ย</h2><div class="note" style="margin-bottom:6px">จากเซตแรกถึงเซตสุดท้าย ไม่รวมวอร์ม · เฉลี่ย 4 ครั้งล่าสุด</div>'+tmr.map(([n,a])=>{const av=Math.round(a.reduce((x,y)=>x+y,0)/a.length);return '<div class="row"><span>'+esc(n)+'</span><span class="r num">'+av+' นาที'+(av>90?' · นานเกิน':'')+'</span></div>'}).join('')+'</div>';
+  if(tmr.length)h+='<div class="card"><h2>เวลาฝึกเฉลี่ย</h2><div class="note" style="margin-bottom:6px">ตั้งแต่เริ่มจับเวลาถึงเซตสุดท้าย รวมเวลาพัก · เฉลี่ย 4 ครั้งล่าสุด</div>'+tmr.map(([n,a])=>{const av=Math.round(a.reduce((x,y)=>x+y,0)/a.length);return '<div class="row"><span>'+esc(n)+'</span><span class="r num">'+av+' นาที'+(av>90?' · นานเกิน':'')+'</span></div>'}).join('')+'</div>';
   h+='<div class="card"><h2>ประวัติการฝึก</h2>'+(list.length?list.slice(0,40).map(([k,s])=>{const p=P[s.dow];return '<button class="rowbtn" data-open="'+esc(k)+'"><div class="row"><span>'+thDate(s.date)+' · '+esc(s.pn||(p?p.short:''))+'</span><span class="r num">'+(durMin(s)?durMin(s)+' นาที · ':'')+sessionDone(s)+' เซต ›</span></div></button>'}).join(''):'<div class="empty">ยังไม่มีบันทึก เริ่มจากแท็บ "ฝึก" แล้วติ๊กเซตที่ทำเสร็จ</div>')+'</div>';
   h+=monthHtml();
   let lastBk=null;try{lastBk=localStorage.getItem('wk2-lastbackup')}catch(e){}
@@ -971,6 +977,7 @@ function checkRollover(){
 }
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)checkRollover()});
 setInterval(checkRollover,60000);
+setInterval(()=>{const el=document.getElementById('prog');if(!el||st.tab!=='train'||document.hidden)return;const p=curProg();if(!p)return;const s=getSession(false);el.textContent=progText(sessionDone(s),p.ex.reduce((a,e)=>a+e.s,0),s)},15000);
 
 /* ---------- events ---------- */
 $('#days').addEventListener('click',ev=>{const b=ev.target.closest('.day');if(!b)return;st.dow=+b.dataset.dow;st.sheet=false;st.edit=null;st.plans=null;st.swapFor=null;st.tab='train';render();scrollTo(0,0)});
@@ -1008,7 +1015,7 @@ function setField(exId,i,f,val){
 }
 function refreshProgress(){
   const p=curProg(),s=getSession(false),tot=p.ex.reduce((a,e)=>a+e.s,0),dn=sessionDone(s);
-  $('#prog').textContent=progText(dn,tot,s);$('#pbar').style.width=(dn/tot*100)+'%';
+  $('#prog').textContent=progText(dn,tot,s);const tb=document.querySelector('[data-tstart]');if(tb&&s&&s.t0)tb.parentNode.remove();$('#pbar').style.width=(dn/tot*100)+'%';
   $('#sum').innerHTML=summaryHtml();
   renderDays();
   return dn>=tot;
@@ -1049,6 +1056,7 @@ $('#main').addEventListener('click',ev=>{
   if(T('[data-plans]')){st.plans={};st.edit=null;st.swapFor=null;render();scrollTo(0,0);return}
   if(T('[data-newday]')){st.edit={dow:st.dow,isNew:true,name:'',short:'',warm:'',ex:[]};render();scrollTo(0,0);return}
   // "วันนี้เป็นยังไง" popup
+  if(T('[data-tstart]')){const s=getSession(true);if(!s.t0){s.t0=Date.now();s.updated=s.t0;queueSave('sessions',sKey())}reTrain();return}
   if(T('[data-sheet]')){st.sheet=true;reTrain();return}
   if(T('[data-sheetx]')){st.sheet=false;reTrain();return}
   if(T('[data-short]')){const s=getSession(true);if(s.short)delete s.short;else s.short=1;s.updated=Date.now();queueSave('sessions',sKey());st.sheet=false;reTrain();return}
